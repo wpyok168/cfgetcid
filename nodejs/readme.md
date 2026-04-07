@@ -50,6 +50,7 @@ npm install
 ```
 
 在你的项目文件夹里，直接复制运行这 1 条终端命令
+
 npm init -y && npm install express cors cookie
 
 或
