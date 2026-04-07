@@ -20,6 +20,8 @@
 - 一个cloudfalare账户
 - 一个域名（部署完后绑定自己的域名）
 
+  建议使用手动部署，一键部署cloudflare可能出现报错，若报错可等一段时间后再试，或直接手动部署。
+
 ### 1. 一键部署（推荐）使用worker.js部署
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wpyok168/cfgetcid)
 
