@@ -49,6 +49,13 @@ ncu -u
 npm install
 ```
 
+在你的项目文件夹里，直接复制运行这 1 条终端命令
+npm init -y && npm install express cors cookie
+
+或
+
+npm init -y --name "iid-activator" --main "server.js" && npm install express cors cookie
+
 ## 启动服务
 ```
 node server.js
