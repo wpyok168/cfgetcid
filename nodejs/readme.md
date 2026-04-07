@@ -35,7 +35,9 @@ npm install express cors cookie
 ```
 
 ## 启动服务
+```
 node server.js
+```
 
 ## 访问地址
 工具页面：http://127.0.0.1:9567
