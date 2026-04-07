@@ -1,4 +1,4 @@
-name = "cfgetcid"
+name = "getcidworker"
 main = "worker.js"
 compatibility_date = "2026-04-07"
 compatibility_flags = ["nodejs_compat"]
