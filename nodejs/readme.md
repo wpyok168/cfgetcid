@@ -33,6 +33,15 @@ npm install
 ```bash
 npm install express cors cookie 
 ```
+###
+- 1. 安装 npm 升级工具
+npm install -g npm-check-updates
+
+- 2. 自动把所有依赖升级到最新版（修改 package.json）
+ncu -u
+
+- 3. 安装最新版依赖
+npm install
 
 ## 启动服务
 ```
