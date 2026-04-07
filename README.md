@@ -16,9 +16,9 @@
 
 ## 部署方式
 ### 准备工作
-1.一个github账户（若手动部署可不需要，一键部署需要）
-2.一个cloudfalare账户
-3.一个域名（部署完后绑定自己的域名）
+- 一个github账户（若手动部署可不需要，一键部署需要）
+- 一个cloudfalare账户
+- 一个域名（部署完后绑定自己的域名）
 
 ### 1. 一键部署（推荐）使用worker.js部署
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wpyok168/cfgetcid)
