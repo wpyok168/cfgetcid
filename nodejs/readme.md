@@ -35,13 +35,19 @@ npm install express cors cookie
 ```
 ### 依赖包升级至最新版
 - 1、安装 npm 升级工具
+```bash
 npm install -g npm-check-updates
+```
 
 - 2、 自动把所有依赖升级到最新版（修改 package.json）
+```bash
 ncu -u
+```
 
 - 3、 安装最新版依赖
+```bash
 npm install
+```
 
 ## 启动服务
 ```
