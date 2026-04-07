@@ -27,7 +27,12 @@
 ## 安装依赖
 
 ```bash
-npm install 或 npm install express cors cookie 
+npm install
+```
+ 或 
+```bash
+npm install express cors cookie 
+```
 
 ## 启动服务
 node server.js
