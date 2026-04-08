@@ -66,5 +66,12 @@ node server.js
 工具页面：http://127.0.0.1:9567
 日志后台：http://127.0.0.1:9567/logs
 
+## 宝塔面板使用（win版）
+在宝塔 终端cmd 运行以下命令  
+1、cd 网站目录  
+2、利用全局已安装的 express，生成本地依赖链接 C:/BtSoft/nodejs/v16.20.2/npm link express  
+3、（可选）为了保险起见，再重新安装一遍所有依赖 C:/BtSoft/nodejs/v16.20.2/npm install  
+4、启动 C:/BtSoft/nodejs/v16.20.2/node server.js  
+
 ## 免责声明
 本工具仅用于合法授权设备的激活辅助，请勿用于未经授权的系统激活行为。所有请求均直接转发至微软官方接口，本程序不存储任何敏感信息。
