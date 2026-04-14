@@ -25,9 +25,9 @@ const PAGE_SIZE = 20;
 const TIMEZONE = 8;
 
 // ====================== 百度 OCR 配置 ======================
-const BAIDU_APP_ID = "你的APP_ID";
-const BAIDU_API_KEY = "你的API_KEY";
-const BAIDU_SECRET_KEY = "你的SECRET_KEY";
+const BAIDU_APP_ID = "122860704";
+const BAIDU_API_KEY = "zMdxTJzPIzH8x9Nr9T4cmKrv";
+const BAIDU_SECRET_KEY = "AdXceoJSVaiDcsobq3ARKRPcTkfKWWOI";
 
 const ocrClient = new AipOcrClient(BAIDU_APP_ID, BAIDU_API_KEY, BAIDU_SECRET_KEY);
 const HttpClient = require('baidu-aip-sdk').HttpClient;
@@ -541,5 +541,6 @@ app.all('/', async (req, res) => {
 // ====================== 启动 ======================
 app.listen(PORT, () => {
   console.log(`✅ 服务已启动：http://127.0.0.1:${PORT}`);
-  console.log(`🔑 日志密码：${LOG_PASSWORD}`);
+  console.log(`🔑 日志后台密码：${LOG_PASSWORD}`);
+  console.log(`📷 新增：图片OCR识别 → 自动获取CID`);
 });
