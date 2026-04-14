@@ -6,6 +6,9 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 
+// 加载环境变量配置（核心：独立配置入口）
+require('dotenv').config();
+
 // 百度 OCR SDK
 const AipOcrClient = require("baidu-aip-sdk").ocr;
 
@@ -25,9 +28,16 @@ const PAGE_SIZE = 20;
 const TIMEZONE = 8;
 
 // ====================== 百度 OCR 配置 ======================
-const BAIDU_APP_ID = "你的_APP_ID";
-const BAIDU_API_KEY = "你的_API_KEY";
-const BAIDU_SECRET_KEY = "你的_SECRET_KEY";
+const BAIDU_APP_ID = process.env.BAIDU_APP_ID;
+const BAIDU_API_KEY = process.env.BAIDU_API_KEY;
+const BAIDU_SECRET_KEY = process.env.BAIDU_SECRET_KEY;
+
+// 启动校验：OCR配置必须填写
+if (!BAIDU_APP_ID || !BAIDU_API_KEY || !BAIDU_SECRET_KEY) {
+  console.error('❌ 错误：百度OCR授权信息未配置！');
+  console.error('✅ 请在项目根目录创建 .env 文件，并填写 BAIDU_APP_ID / BAIDU_API_KEY / BAIDU_SECRET_KEY');
+  process.exit(1);
+}
 
 const ocrClient = new AipOcrClient(BAIDU_APP_ID, BAIDU_API_KEY, BAIDU_SECRET_KEY);
 const HttpClient = require('baidu-aip-sdk').HttpClient;
@@ -570,8 +580,10 @@ app.all('/', async (req, res) => {
 });
 
 // ====================== 启动 ======================
+// ====================== 启动 ======================
 app.listen(PORT, () => {
   console.log(`✅ 服务已启动：http://127.0.0.1:${PORT}`);
   console.log(`🔑 日志后台密码：${LOG_PASSWORD}`);
+  console.log(`📷 OCR配置已加载：从.env环境变量读取`);
   console.log(`📷 新增：图片OCR识别 → 自动获取CID`);
 });
