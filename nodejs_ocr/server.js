@@ -469,7 +469,8 @@ app.post('/api/ocr-iid', upload.single('image'), async (req, res) => {
     const result = await sendActivationRequest(first);
     logBatch.push({ id: crypto.randomUUID(), time: getFormatTime(), IID: first, ip: req.ip, result });
     if (needFlush()) flushBatch();
-    return res.json(result.data);
+    //return res.json(result.data);
+    return res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
