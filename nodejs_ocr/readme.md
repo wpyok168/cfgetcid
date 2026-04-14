@@ -68,10 +68,10 @@ server
 ```
 cd C:\wwwroot\GetCID
 C:/BtSoft/nodejs/v22.222.2\npm install express cors cookie multer baidu-aip-sdk --force 
-C:/BtSoft/nodejs/v16.20.2\node server.js
+C:/BtSoft/nodejs/v22.22.2\node server.js
 curl http://127.0.0.1:9567
 
-C:/BtSoft/nodejs/v16.20.2\npm cache clean --force
+C:/BtSoft/nodejs/v22.22.2\npm cache clean --force
 ```
 
 
