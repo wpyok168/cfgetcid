@@ -97,34 +97,63 @@ function getFormatTime(offset = 8) {
   return tz.toISOString().replace('T', ' ').slice(0, 19);
 }
 
-// ====================== IID 提取规则（9×6 / 9×7） ======================
+// ====================== IID 提取规则（修正：过滤无关数字，优先7位组→6位组） ======================
 function extractIIDs(text) {
   const results = [];
 
+  // 新增：过滤无关数字（解决800/400电话号码、短数字误识别问题）
+  // 1. 过滤800/400开头的10位电话号码（如8008203800、4008203800）
+  let filteredText = text.replace(/\b(800|400)\d{1,7}\b/g, '');
+  // 2. 过滤非6位、非7位的短数字（如12345678，避免干扰IID提取）
+  filteredText = filteredText.replace(/\b\d{1,5}\b|\b\d{8,9}\b/g, '');
+
+  // 原有格式匹配（保留，基于过滤后文本匹配）
   const pattern54 = /\b(?:\d{6}\s+){8}\d{6}\b/g;
   const pattern63 = /\b(?:\d{7}\s+){8}\d{7}\b/g;
 
-  const m54 = text.match(pattern54) || [];
-  const m63 = text.match(pattern63) || [];
+  const m54 = filteredText.match(pattern54) || [];
+  const m63 = filteredText.match(pattern63) || [];
 
-  for (const s of m54) {
-    const c = s.replace(/\s+/g, '');
-    if (c.length === 54) results.push(c);
-  }
+  // 优先级1：先处理 63位（7位一组）IID
   for (const s of m63) {
     const c = s.replace(/\s+/g, '');
     if (c.length === 63) results.push(c);
   }
 
-  const nums = text.match(/\d{54,63}/g) || [];
+  // 优先级2：再处理 54位（6位一组）IID
+  for (const s of m54) {
+    const c = s.replace(/\s+/g, '');
+    if (c.length === 54) results.push(c);
+  }
+
+  // 优先级3：纯数字长串（优先63位，再54位，基于过滤后文本）
+  const nums = filteredText.match(/\d{54,63}/g) || [];
+  // 先取63位
   for (const n of nums) {
-    if (n.length === 54 || n.length === 63) {
+    if (n.length === 63) {
+      results.push(n);
+    }
+  }
+  // 再取54位
+  for (const n of nums) {
+    if (n.length === 54) {
       results.push(n);
     }
   }
 
+  // 优先级4：兜底（过滤后所有数字拼接，优先63位，再54位）
+  const allDigits = filteredText.replace(/\D/g, '');
+  if (allDigits.length >= 63) {
+    results.push(allDigits.slice(0, 63));
+  } else if (allDigits.length >= 54) {
+    results.push(allDigits.slice(0, 54));
+  }
+
+  // 去重，避免重复提取
   return [...new Set(results)];
 }
+
+
 
 // ====================== KV 存储 ======================
 async function flushBatch() {
@@ -439,6 +468,7 @@ async function sendActivationRequest(IID) {
   if (!IID) throw new Error('missing IID');
   const dpop = await c1('/api/productActivation/validateIID', 'POST');
   const sid = GenerateSessionId();
+  console.log(IID)
   const digits = Math.floor(IID.length / 9);
   const res = await fetch('https://visualsupport.microsoft.com/api/productActivation/validateIID', {
     method: 'POST',
