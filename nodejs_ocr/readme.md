@@ -74,4 +74,15 @@ curl http://127.0.0.1:9567
 C:/BtSoft/nodejs/v22.22.2\npm cache clean --force
 ```
 
+## nodejs 打包
+确保 package.json 在项目根目录（和你的主代码 server.js 放一起）
+安装打包工具  
+npm install -g pkg  
+打包  
+pkg server.js -t node18-win-x64 --compress GZip -o IID工具.exe  或 pkg . -t node18-win-x64 -o IID激活工具.exe
+
+
+其他打包工具  
+nexe：和 pkg 类似，打包体积更小  
+electron-builder：适合带图形界面的 Node 项目（你这个后端用不上）  
 
