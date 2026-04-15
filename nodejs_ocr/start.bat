@@ -1,14 +1,15 @@
 @echo off
+title IID工具服务
 echo ==============================================
-echo  启动服务
+echo  服务启动中，窗口将自动最小化
 echo ==============================================
 echo.
 
 cd /d "%~dp0"
 
-:: 5. 启动服务
-node server.js
 
-echo.
-echo 服务已退出，按任意键关闭窗口
-pause >nul
+:: 【核心】Windows原生最小化启动服务（绝对稳定）
+start /min cmd /k "node server.js"
+
+:: 关闭当前窗口，只保留最小化的服务窗口
+exit
