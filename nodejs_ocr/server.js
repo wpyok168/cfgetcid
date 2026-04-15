@@ -43,9 +43,9 @@ initConfig();
 //const BAIDU_APP_ID = process.env.BAIDU_APP_ID;
 //const BAIDU_API_KEY = process.env.BAIDU_API_KEY;
 //const BAIDU_SECRET_KEY = process.env.BAIDU_SECRET_KEY;
-const BAIDU_APP_ID = "122860704";
-const BAIDU_API_KEY = "zMdxTJzPIzH8x9Nr9T4cmKrv";
-const BAIDU_SECRET_KEY = "AdXceoJSVaiDcsobq3ARKRPcTkfKWWOI";
+const BAIDU_APP_ID = "你的_APP_ID";
+const BAIDU_API_KEY = "你的_API_KEY";
+const BAIDU_SECRET_KEY = "你的_SECRET_KEY";
 
 // 启动校验：OCR配置必须填写
 if (!BAIDU_APP_ID || !BAIDU_API_KEY || !BAIDU_SECRET_KEY) {
