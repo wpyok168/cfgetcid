@@ -107,7 +107,10 @@ async function c1(t, e) {
 }
 
 function GenerateSessionId() {
-  return 'app_' + Math.random().toString(36).slice(2, 15);
+  //return 'app_' + Math.random().toString(36).slice(2, 15);
+  const t = Date.now().toString(36);
+  const e = Math.random().toString(36).substr(2, 9);
+  return `app_${t}_${e}`;
 }
 
 async function safeParse(resp) {
