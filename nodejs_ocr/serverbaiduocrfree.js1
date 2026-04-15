@@ -180,7 +180,6 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ====================== 配置 ======================
-const LOG_PASSWORD = process.env.LOG_PASSWORD || '123456';
 const PORT = process.env.PORT || 9567;
 const KV_DIR = path.join(__dirname, 'kv_logs');
 const BATCH_SIZE = 20;
@@ -188,6 +187,29 @@ const BATCH_FLUSH_SECONDS = 300;
 const MAX_BATCH_READ = 50;
 const PAGE_SIZE = 20;
 const TIMEZONE = 8;
+
+// ====================== 新增：登录密码持久化配置（仅新增部分） ======================
+const PWD_FILE = path.join(__dirname, 'password.json');
+let LOG_PASSWORD = '123456'; // 默认初始密码
+
+// 初始化密码：读取本地文件，不存在则创建默认密码
+async function initPassword() {
+  try {
+    await fs.access(PWD_FILE);
+    const data = await fs.readFile(PWD_FILE, 'utf8');
+    const pwdData = JSON.parse(data);
+    if (pwdData.password) LOG_PASSWORD = pwdData.password;
+  } catch {
+    await fs.writeFile(PWD_FILE, JSON.stringify({ password: LOG_PASSWORD }, null, 2), 'utf8');
+  }
+}
+initPassword();
+
+// 保存新密码到本地文件
+async function saveNewPassword(newPwd) {
+  await fs.writeFile(PWD_FILE, JSON.stringify({ password: newPwd }, null, 2), 'utf8');
+  LOG_PASSWORD = newPwd; // 更新内存密码
+}
 
 // 实例化OCR
 const ocrService = new BaiduOcrService();
@@ -365,6 +387,11 @@ function loginPage() {
   return `<!DOCTYPE html><meta charset="utf-8"><title>登录</title><style>body{display:grid;place-items:center;height:100vh;margin:0}.box{padding:24px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);width:320px}input,button{width:100%;padding:10px;margin:8px 0;border-radius:6px;border:1px solid #ddd}button{background:#0066cc;color:white;border:none;cursor:pointer}</style><div class="box"><h3>日志后台登录</h3><form method="post"><input type="password" name="pwd" required placeholder="密码"><button>登录</button></form></div>`;
 }
 
+// 新增：修改密码页面
+function changePwdPage() {
+  return `<!DOCTYPE html><meta charset="utf-8"><title>修改登录密码</title><style>body{display:grid;place-items:center;height:100vh;margin:0}.box{padding:24px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);width:320px}input,button{width:100%;padding:10px;margin:8px 0;border-radius:6px;border:1px solid #ddd}button{background:#0066cc;color:white;border:none;cursor:pointer}.btn-gray{background:#6c757d}.red{background:red}</style><div class="box"><h3>修改登录密码</h3><form method="post" id="pwdForm"><input type="password" name="oldPwd" required placeholder="当前密码"><input type="password" name="newPwd" required placeholder="新密码（≥6位）" minlength="6"><input type="password" name="confirmPwd" required placeholder="确认新密码" minlength="6"><button type="submit">确认修改</button><button type="button" class="btn-gray" onclick="location.href='/logs'">返回日志后台</button></form><script>document.getElementById('pwdForm').onsubmit=function(e){const newP=document.querySelector('[name=newPwd]').value;const cP=document.querySelector('[name=confirmPwd]').value;if(newP!==cP){alert('两次密码不一致');e.preventDefault();}}</script></div>`;
+}
+
 function logPage(logs, page, totalPages, search) {
   const start = (page - 1) * PAGE_SIZE;
   const end = start + PAGE_SIZE;
@@ -394,6 +421,7 @@ body{margin:20px;font-family:system-ui;background:#fafafa}
 .bar{display:flex;gap:10px;margin:10px 0}
 input{flex:1;padding:8px;border-radius:6px;border:1px solid #ddd}
 button{padding:8px 12px;border:none;border-radius:6px;color:white;cursor:pointer}
+.btn-gray{background:#6c757d}
 .red{background:red}
 table{width:100%;border-collapse:collapse}
 th,td{padding:10px;border:1px solid #eee}
@@ -413,6 +441,7 @@ th,td{padding:10px;border:1px solid #eee}
   <div class="bar">
     <input id="s" value="${search}" placeholder="搜索 IID">
     <button onclick="location.href='?search='+encodeURIComponent(document.getElementById('s').value)">搜索</button>
+    <button class="btn-gray" onclick="location.href='/logs/change-pwd'">修改密码</button>
     <a href="/logs/clear"><button class="red">清空全部</button></a>
   </div>
   <div style="margin:10px 0">${pages.join('')}</div>
@@ -679,6 +708,37 @@ app.post('/logs/delete', async (req, res) => {
   res.send('ok');
 });
 
+// 新增：修改密码页面路由
+app.get('/logs/change-pwd', async (req, res) => {
+  if (!isAuth(req)) return res.sendStatus(403);
+  res.send(changePwdPage());
+});
+
+// 新增：修改密码接口路由
+app.post('/logs/change-pwd', async (req, res) => {
+  if (!isAuth(req)) return res.sendStatus(403);
+  const { oldPwd, newPwd, confirmPwd } = req.body;
+  
+  // 验证当前密码
+  if (oldPwd !== LOG_PASSWORD) {
+    return res.send(`<script>alert('当前密码错误');location.href='/logs/change-pwd'</script>`);
+  }
+  // 验证两次密码一致
+  if (newPwd !== confirmPwd) {
+    return res.send(`<script>alert('两次输入的新密码不一致');location.href='/logs/change-pwd'</script>`);
+  }
+  // 验证密码长度
+  if (newPwd.length < 6) {
+    return res.send(`<script>alert('密码长度不能小于6位');location.href='/logs/change-pwd'</script>`);
+  }
+
+  // 保存新密码
+  await saveNewPassword(newPwd);
+  // 清除登录状态，重新登录
+  res.clearCookie('log_token', { path: '/logs' });
+  res.send(`<script>alert('密码修改成功！请使用新密码重新登录');location.href='/logs'</script>`);
+});
+
 app.all('/logs', async (req, res) => {
   if (req.method === 'POST') {
     const pwd = req.body.pwd;
@@ -720,7 +780,8 @@ app.all('/', async (req, res) => {
 // ====================== 启动 ======================
 app.listen(PORT, () => {
   console.log(`✅ 服务已启动：http://127.0.0.1:${PORT}`);
-  console.log(`🔑 日志后台密码：${LOG_PASSWORD}`);
+  console.log(`🔑 日志后台当前密码：${LOG_PASSWORD}`);
   console.log(`📷 已使用你提供的新版百度OCR类`);
   console.log(`📷 新增：图片OCR识别 → 自动获取CID`);
+  console.log(`🔒 新增：日志后台密码修改功能`);
 });
