@@ -18,7 +18,8 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ====================== 配置 ======================
-const LOG_PASSWORD = process.env.LOG_PASSWORD || '123456';
+const CONFIG_PATH = path.join(__dirname, 'config.json');
+let LOG_PASSWORD = '123456';
 const PORT = process.env.PORT || 9567;
 const KV_DIR = path.join(__dirname, 'kv_logs');
 const BATCH_SIZE = 20;
@@ -27,13 +28,24 @@ const MAX_BATCH_READ = 50;
 const PAGE_SIZE = 20;
 const TIMEZONE = 8;
 
+// 密码持久化
+async function initConfig() {
+  try { await fs.access(CONFIG_PATH); const c=JSON.parse(await fs.readFile(CONFIG_PATH,'utf8')); if(c.password)LOG_PASSWORD=c.password; }
+  catch { await fs.writeFile(CONFIG_PATH,JSON.stringify({password:LOG_PASSWORD},null,2),'utf8'); }
+}
+async function savePassword(newPwd) {
+  await fs.writeFile(CONFIG_PATH,JSON.stringify({password:newPwd},null,2),'utf8');
+  LOG_PASSWORD = newPwd;
+}
+initConfig();
+
 // ====================== 百度 OCR 配置 ======================
 //const BAIDU_APP_ID = process.env.BAIDU_APP_ID;
 //const BAIDU_API_KEY = process.env.BAIDU_API_KEY;
 //const BAIDU_SECRET_KEY = process.env.BAIDU_SECRET_KEY;
-const BAIDU_APP_ID = "你的_APP_ID";
-const BAIDU_API_KEY = "你的_API_KEY";
-const BAIDU_SECRET_KEY = "你的_SECRET_KEY";
+const BAIDU_APP_ID = "122860704";
+const BAIDU_API_KEY = "zMdxTJzPIzH8x9Nr9T4cmKrv";
+const BAIDU_SECRET_KEY = "AdXceoJSVaiDcsobq3ARKRPcTkfKWWOI";
 
 // 启动校验：OCR配置必须填写
 if (!BAIDU_APP_ID || !BAIDU_API_KEY || !BAIDU_SECRET_KEY) {
@@ -103,11 +115,21 @@ async function safeParse(resp) {
   try { return JSON.parse(text); } catch { return { raw: text }; }
 }
 
-function getFormatTime(offset = 8) {
+// ✅ 修复：保留时区偏移，正确计算东八区时间，日期+时间完全准确
+function getFormatTime(offset = TIMEZONE) {
   const now = new Date();
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const tz = new Date(utc + 3600000 * offset);
-  return tz.toISOString().replace('T', ' ').slice(0, 19);
+  // 计算UTC时间戳
+  const utcTimestamp = now.getTime() + now.getTimezoneOffset() * 60000;
+  // 应用时区偏移
+  const targetTime = new Date(utcTimestamp + 3600000 * offset);
+  // 格式化年月日时分秒
+  const year = targetTime.getFullYear();
+  const month = String(targetTime.getMonth() + 1).padStart(2, '0');
+  const day = String(targetTime.getDate()).padStart(2, '0');
+  const hours = String(targetTime.getHours()).padStart(2, '0');
+  const minutes = String(targetTime.getMinutes()).padStart(2, '0');
+  const seconds = String(targetTime.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
 // ====================== IID 提取规则（修正：过滤无关数字，优先7位组→6位组） ======================
@@ -228,8 +250,32 @@ async function clearAllLogs() {
 }
 
 // ====================== 页面 ======================
-function loginPage() {
-  return `<!DOCTYPE html><meta charset="utf-8"><title>登录</title><style>body{display:grid;place-items:center;height:100vh;margin:0}.box{padding:24px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);width:320px}input,button{width:100%;padding:10px;margin:8px 0;border-radius:6px;border:1px solid #ddd}button{background:#0066cc;color:white;border:none;cursor:pointer}</style><div class="box"><h3>日志后台登录</h3><form method="post"><input type="password" name="pwd" required placeholder="密码"><button>登录</button></form></div>`;
+function loginPage(msg = '') {
+  return `<!DOCTYPE html><meta charset="utf-8"><title>登录</title><style>body{display:grid;place-items:center;height:100vh;margin:0}.box{padding:24px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);width:320px}input,button{width:100%;padding:10px;margin:8px 0;border-radius:6px;border:1px solid #ddd}button{background:#0066cc;color:white;border:none;cursor:pointer}.msg{color:green;text-align:center;margin:8px 0}.err{color:red}</style><div class="box"><h3>日志后台登录</h3>${msg ? `<div class="${msg.includes('成功') ? 'msg' : 'err'}">${msg}</div>` : ''}<form method="post"><input type="password" name="pwd" required placeholder="密码"><button>登录</button></form></div>`;
+}
+
+// 新增：修改密码页面
+function changePasswordPage(msg = '') {
+  return `<!DOCTYPE html><meta charset="utf-8"><title>修改登录密码</title>
+<style>
+body{display:grid;place-items:center;height:100vh;margin:0;background:#fafafa}
+.box{padding:24px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);width:380px}
+input,button{width:100%;padding:10px;margin:8px 0;border-radius:6px;border:1px solid #ddd}
+button{background:#0066cc;color:white;border:none;cursor:pointer}
+.back{background:#6c757d;margin-top:10px}
+.msg{color:red;text-align:center;margin:8px 0}
+</style>
+<div class="box">
+  <h3>修改日志后台密码</h3>
+  ${msg ? `<div class="msg">${msg}</div>` : ''}
+  <form method="post">
+    <input type="password" name="oldPwd" required placeholder="请输入旧密码">
+    <input type="password" name="newPwd" required placeholder="请输入新密码">
+    <input type="password" name="confirmPwd" required placeholder="请确认新密码">
+    <button type="submit">确认修改</button>
+    <button type="button" class="back" onclick="location.href='/logs'">返回日志页</button>
+  </form>
+</div>`;
 }
 
 function logPage(logs, page, totalPages, search) {
@@ -280,6 +326,7 @@ th,td{padding:10px;border:1px solid #eee}
   <div class="bar">
     <input id="s" value="${search}" placeholder="搜索 IID">
     <button onclick="location.href='?search='+encodeURIComponent(document.getElementById('s').value)">搜索</button>
+    <a href="/logs/change-password"><button style="background:#0066cc;color:white;border:none;padding:8px 12px;border-radius:6px;cursor:pointer">修改密码</button></a>
     <a href="/logs/clear"><button class="red">清空全部</button></a>
   </div>
   <div style="margin:10px 0">${pages.join('')}</div>
@@ -512,7 +559,6 @@ app.post('/api/ocr-iid', upload.single('image'), async (req, res) => {
     const result = await sendActivationRequest(first);
     logBatch.push({ id: crypto.randomUUID(), time: getFormatTime(), IID: first, ip: req.ip, result });
     if (needFlush()) flushBatch();
-    //return res.json(result.data);
     return res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -531,6 +577,24 @@ app.post('/api/ocr-only', upload.single('image'), async (req, res) => {
 });
 
 // ====================== 路由 ======================
+// 新增：修改密码路由（修改后强制退出重新登录）
+app.all('/logs/change-password', async (req, res) => {
+  if (!isAuth(req)) return res.send(loginPage());
+  if (req.method === 'POST') {
+    const { oldPwd, newPwd, confirmPwd } = req.body;
+    if (oldPwd !== LOG_PASSWORD) return res.send(changePasswordPage('❌ 旧密码错误'));
+    if (newPwd !== confirmPwd) return res.send(changePasswordPage('❌ 两次密码不一致'));
+    if (!newPwd.trim()) return res.send(changePasswordPage('❌ 新密码不能为空'));
+    await savePassword(newPwd.trim());
+    
+    // 清除登录Cookie，强制重新登录
+    res.clearCookie('log_token', { path: '/logs' });
+    // 跳转到登录页，提示修改成功
+    return res.redirect('/logs?msg=密码修改成功，请使用新密码登录');
+  }
+  res.send(changePasswordPage());
+});
+
 app.get('/logs/clear', async (req, res) => {
   if (!isAuth(req)) return res.sendStatus(403);
   await clearAllLogs();
@@ -545,6 +609,7 @@ app.post('/logs/delete', async (req, res) => {
 });
 
 app.all('/logs', async (req, res) => {
+  const msg = req.query.msg || '';
   if (req.method === 'POST') {
     const pwd = req.body.pwd;
     if (pwd === LOG_PASSWORD) {
@@ -552,8 +617,9 @@ app.all('/logs', async (req, res) => {
         path: '/logs', httpOnly: true, maxAge: 86400, sameSite: 'lax'
       }).redirect('/logs');
     }
+    return res.send(loginPage('❌ 密码错误'));
   }
-  if (!isAuth(req)) return res.send(loginPage());
+  if (!isAuth(req)) return res.send(loginPage(msg));
   await flushBatch();
   const search = req.query.search || '';
   const page = parseInt(req.query.page) || 1;
@@ -572,7 +638,7 @@ app.all('/', async (req, res) => {
     const result = await sendActivationRequest(IID);
     logBatch.push({
       id: crypto.randomUUID(),
-      time: getFormatTime(TIMEZONE),
+      time: getFormatTime(),
       IID, ip, result
     });
     if (needFlush()) flushBatch();
@@ -583,10 +649,9 @@ app.all('/', async (req, res) => {
 });
 
 // ====================== 启动 ======================
-// ====================== 启动 ======================
 app.listen(PORT, () => {
   console.log(`✅ 服务已启动：http://127.0.0.1:${PORT}`);
   console.log(`🔑 日志后台密码：${LOG_PASSWORD}`);
-  //console.log(`📷 OCR配置已加载：从.env环境变量读取`);
   console.log(`📷 新增：图片OCR识别 → 自动获取CID`);
+  console.log(`🔐 新增：修改密码后强制重新登录`);
 });
