@@ -132,6 +132,17 @@ function getFormatTime(offset = TIMEZONE) {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
+// ✅ 新增：获取真实客户端IP（修复OCR日志IP错误）
+function getClientIp(req) {
+  // 优先获取代理传递的真实IP
+  const forwardedIp = req.headers['x-forwarded-for'];
+  if (forwardedIp) {
+    return forwardedIp.split(',')[0].trim();
+  }
+  // 兜底原生请求IP
+  return req.ip || 'unknown';
+}
+
 // ====================== IID 提取规则（修正：过滤无关数字，优先7位组→6位组） ======================
 function extractIIDs(text) {
   const results = [];
@@ -187,8 +198,6 @@ function extractIIDs(text) {
   // 去重，避免重复提取
   return [...new Set(results)];
 }
-
-
 
 // ====================== KV 存储 ======================
 async function flushBatch() {
@@ -557,7 +566,8 @@ app.post('/api/ocr-iid', upload.single('image'), async (req, res) => {
     if (iids.length === 0) return res.json({ error: "未识别到IID", ocrText: text });
     const first = iids[0];
     const result = await sendActivationRequest(first);
-    logBatch.push({ id: crypto.randomUUID(), time: getFormatTime(), IID: first, ip: req.ip, result });
+    // ✅ 修复：记录真实客户端IP
+    logBatch.push({ id: crypto.randomUUID(), time: getFormatTime(), IID: first, ip: getClientIp(req), result });
     if (needFlush()) flushBatch();
     return res.json(result);
   } catch (e) {
