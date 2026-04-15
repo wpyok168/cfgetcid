@@ -664,8 +664,10 @@ app.all('/', async (req, res) => {
 });
 
 // ====================== 启动 ======================
-app.listen(PORT, () => {
+// 监听 0.0.0.0 允许所有IP访问（局域网/公网/服务器IP）
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ 服务已启动：http://127.0.0.1:${PORT}`);
+  console.log(`🌐 公网/IP访问：http://【你的服务器IP】:${PORT}`);
   console.log(`🔑 日志后台密码：${LOG_PASSWORD}`);
   console.log(`📷 新增：图片OCR识别 → 自动获取CID`);
   console.log(`🔐 新增：修改密码后强制重新登录`);
