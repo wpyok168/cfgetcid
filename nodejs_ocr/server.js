@@ -18,10 +18,12 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ====================== 配置 ======================
-const CONFIG_PATH = path.join(__dirname, 'config.json');
+//const CONFIG_PATH = path.join(__dirname, 'config.json');
+const CONFIG_PATH = path.join(process.cwd(), 'config.json');
 let LOG_PASSWORD = '123456';
 const PORT = process.env.PORT || 9567;
-const KV_DIR = path.join(__dirname, 'kv_logs');
+//const KV_DIR = path.join(__dirname, 'kv_logs');
+const KV_DIR = path.join(process.cwd(), 'kv_logs');
 const BATCH_SIZE = 20;
 const BATCH_FLUSH_SECONDS = 300;
 const MAX_BATCH_READ = 50;
@@ -43,9 +45,9 @@ initConfig();
 //const BAIDU_APP_ID = process.env.BAIDU_APP_ID;
 //const BAIDU_API_KEY = process.env.BAIDU_API_KEY;
 //const BAIDU_SECRET_KEY = process.env.BAIDU_SECRET_KEY;
-const BAIDU_APP_ID = "你的_APP_ID";
-const BAIDU_API_KEY = "你的_API_KEY";
-const BAIDU_SECRET_KEY = "你的_SECRET_KEY";
+const BAIDU_APP_ID = "122860704";
+const BAIDU_API_KEY = "zMdxTJzPIzH8x9Nr9T4cmKrv";
+const BAIDU_SECRET_KEY = "AdXceoJSVaiDcsobq3ARKRPcTkfKWWOI";
 
 // 启动校验：OCR配置必须填写
 if (!BAIDU_APP_ID || !BAIDU_API_KEY || !BAIDU_SECRET_KEY) {
