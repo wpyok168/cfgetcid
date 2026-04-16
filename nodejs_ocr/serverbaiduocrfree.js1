@@ -36,6 +36,8 @@ initConfig();
 // ====================== 百度 OCR 配置（仅保留 API_KEY + SECRET_KEY，无APP ID） ======================
 const BAIDU_API_KEY = "OFClXkRRS9TRRTDvnKMk4TS1";
 const BAIDU_SECRET_KEY = "cyWM6fnvKn5eeLAR6WBGZwYkU2OufuOJ";
+//普通版 general_basic  高精度版accurate_basic
+const ocrUrl = "https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic";
 
 // 启动校验：仅校验必填的 API_KEY / SECRET_KEY
 if (!BAIDU_API_KEY || !BAIDU_SECRET_KEY) {
@@ -77,13 +79,12 @@ async function getBaiduAccessToken() {
 }
 
 /**
- * 百度高精度OCR识别
+ * 百度高精度OCR识别  普通版 general_basic  高精度版accurate_basic
  */
 async function baiduAccurateBasicOcr(base64Image) {
   const pureBase64 = base64Image.replace(/^data:image\/\w+;base64,/, '');
   
   const token = await getBaiduAccessToken();
-  const ocrUrl = "https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic";//普通版 general_basic  高精度版accurate_basic
   
   const params = new URLSearchParams();
   params.append("image", pureBase64);
