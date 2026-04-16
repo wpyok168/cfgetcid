@@ -5,6 +5,7 @@ const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
+const axios = require('axios'); // 替换fetch，消除警告
 
 const app = express();
 app.use(cors());
@@ -33,87 +34,71 @@ async function savePassword(newPwd) {
 }
 initConfig();
 
-// ====================== 百度 OCR 配置（仅保留 API_KEY + SECRET_KEY，无APP ID） ======================
+// ====================== 百度 OCR 配置（无APP ID） ======================
 const BAIDU_API_KEY = "OFClXkRRS9TRRTDvnKMk4TS1";
 const BAIDU_SECRET_KEY = "cyWM6fnvKn5eeLAR6WBGZwYkU2OufuOJ";
 //普通版 general_basic  高精度版accurate_basic
 const ocrUrl = "https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic";
 
-// 启动校验：仅校验必填的 API_KEY / SECRET_KEY
 if (!BAIDU_API_KEY || !BAIDU_SECRET_KEY) {
   console.error('❌ 错误：百度OCR授权信息未配置！');
-  console.error('✅ 请填写 BAIDU_API_KEY / BAIDU_SECRET_KEY');
   process.exit(1);
 }
 
-// ====================== 百度OCR HTTP接口实现 ======================
+// ====================== 百度OCR HTTP接口（axios版，无警告） ======================
 let baiduAccessToken = null;
 let baiduTokenExpireTime = 0;
 
-/**
- * 获取百度OCR AccessToken
- */
 async function getBaiduAccessToken() {
   if (baiduAccessToken && Date.now() < baiduTokenExpireTime) {
     return baiduAccessToken;
   }
 
-  const tokenUrl = "https://aip.baidubce.com/oauth/2.0/token";
-  const params = new URLSearchParams();
-  params.append("grant_type", "client_credentials");
-  params.append("client_id", BAIDU_API_KEY);
-  params.append("client_secret", BAIDU_SECRET_KEY);
-
-  const resp = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: params
-  });
-
-  const data = await resp.json();
-  if (data.error) throw new Error(`获取Token失败：${data.error_description}`);
-
-  baiduAccessToken = data.access_token;
-  baiduTokenExpireTime = Date.now() + (data.expires_in - 60) * 1000;
-  return baiduAccessToken;
-}
-
-/**
- * 百度高精度OCR识别  普通版 general_basic  高精度版accurate_basic
- */
-async function baiduAccurateBasicOcr(base64Image) {
-  const pureBase64 = base64Image.replace(/^data:image\/\w+;base64,/, '');
-  
-  const token = await getBaiduAccessToken();
-  
-  const params = new URLSearchParams();
-  params.append("image", pureBase64);
-  params.append("access_token", token);
-  params.append("language_type", "CHN_ENG");
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-
   try {
-    const resp = await fetch(ocrUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: params,
-      signal: controller.signal
+    const res = await axios.post('https://aip.baidubce.com/oauth/2.0/token', null, {
+      params: {
+        grant_type: 'client_credentials',
+        client_id: BAIDU_API_KEY,
+        client_secret: BAIDU_SECRET_KEY
+      },
+      timeout: 10000
     });
 
-    clearTimeout(timeoutId);
-    const result = await resp.json();
-    
+    const data = res.data;
+    if (data.error) throw new Error(`获取Token失败：${data.error_description}`);
+
+    baiduAccessToken = data.access_token;
+    baiduTokenExpireTime = Date.now() + (data.expires_in - 60) * 1000;
+    return baiduAccessToken;
+  } catch (e) {
+    throw new Error('Token请求失败');
+  }
+}
+
+async function baiduAccurateBasicOcr(base64Image) {
+  const pureBase64 = base64Image.replace(/^data:image\/\w+;base64,/, '');
+  const token = await getBaiduAccessToken();
+
+  try {
+    // 构建表单数据（百度OCR官方要求格式，解决413错误）
+    const params = new URLSearchParams();
+    params.append('image', pureBase64);
+    params.append('language_type', 'CHN_ENG');
+
+    const res = await axios.post(`${ocrUrl}?access_token=${token}`, params, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      timeout: 10000
+    });
+
+    const result = res.data;
     if (result.error_code) {
       throw new Error(`OCR失败[${result.error_code}]：${result.error_msg}`);
     }
     return result;
   } catch (e) {
-    if (e.name === 'AbortError') {
-      throw new Error('OCR请求超时');
-    }
-    throw e;
+    throw new Error(e.message || 'OCR请求失败');
   }
 }
 
@@ -172,8 +157,11 @@ function GenerateSessionId() {
 }
 
 async function safeParse(resp) {
-  const text = await resp.text();
-  try { return JSON.parse(text); } catch { return { raw: text }; }
+  try {
+    return resp.data;
+  } catch {
+    return { raw: resp };
+  }
 }
 
 function getFormatTime(offset = TIMEZONE) {
@@ -568,28 +556,31 @@ $('#btnOcrOnly').onclick = async () => {
 </body></html>`;
 }
 
-// ====================== 激活接口 ======================
+// ====================== 激活接口（axios版，无警告） ======================
 async function sendActivationRequest(IID) {
   if (!IID) throw new Error('missing IID');
   const dpop = await c1('/api/productActivation/validateIID', 'POST');
   const sid = GenerateSessionId();
-  console.log(IID)
-  const digits = Math.floor(IID.length / 9);
-  const res = await fetch('https://visualsupport.microsoft.com/api/productActivation/validateIID', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer govUrlID',
-      'DPoP': dpop,
-      'x-session-id': sid
-    },
-    body: JSON.stringify({
+
+  try {
+    const res = await axios.post('https://visualsupport.microsoft.com/api/productActivation/validateIID', {
       IID, ProductType: 'windows', productGroup: 'Windows', productName: 'Windows 11',
-      numberOfDigits: digits, Country: 'CHN', Region: 'APAC', InstalledDevices: 1,
+      numberOfDigits: Math.floor(IID.length / 9), Country: 'CHN', Region: 'APAC', InstalledDevices: 1,
       OverrideStatusCode: 'MUL', InitialReasonCode: '45164'
-    })
-  });
-  return { status: res.status, success: res.ok, data: await safeParse(res) };
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer govUrlID',
+        'DPoP': dpop,
+        'x-session-id': sid
+      },
+      timeout: 10000
+    });
+
+    return { status: res.status, success: true, data: res.data };
+  } catch (e) {
+    return { status: e.response?.status || 500, success: false, data: e.message };
+  }
 }
 
 // ====================== OCR 接口 ======================
@@ -678,11 +669,7 @@ app.all('/', async (req, res) => {
     if (!IID) return res.status(400).json({ error: 'missing IID' });
     const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
     const result = await sendActivationRequest(IID);
-    logBatch.push({
-      id: crypto.randomUUID(),
-      time: getFormatTime(),
-      IID, ip, result
-    });
+    logBatch.push({ id: crypto.randomUUID(), time: getFormatTime(), IID, ip, result });
     if (needFlush()) flushBatch();
     res.json(result);
   } catch (err) {
