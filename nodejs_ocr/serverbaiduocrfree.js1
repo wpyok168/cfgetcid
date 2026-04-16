@@ -695,6 +695,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ 服务已启动：http://127.0.0.1:${PORT}`);
   console.log(`🌐 公网/IP访问：http://【你的服务器IP】:${PORT}`);
   console.log(`🔑 日志后台密码：${LOG_PASSWORD}`);
-  console.log(`📷 OCR接口：https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic`);
-  console.log(`🔐 已移除百度APP ID，仅使用 API_KEY + SECRET_KEY`);
+  console.log(`📷 新增：图片OCR识别 → 自动获取CID`);
+  console.log(`🔐 新增：修改密码后强制重新登录`);
 });
