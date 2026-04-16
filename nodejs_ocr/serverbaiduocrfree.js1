@@ -2,177 +2,9 @@ const express = require('express');
 const cors = require('cors');
 const cookie = require('cookie');
 const fs = require('fs/promises');
-const fsSync = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
-const axios = require('axios');
-
-// 加载环境变量配置（核心：独立配置入口）
-//require('dotenv').config();
-
-// ====================== 你提供的百度OCR服务类 ======================
-class BaiduOcrService {
-  constructor() {
-    this.apiKey = 'OFClXkRRS9TRRTDvnKMk4TS1';
-    this.secretKey = 'cyWM6fnvKn5eeLAR6WBGZwYkU2OufuOJ';
-
-    this.tokenUrl = 'https://aip.baidubce.com/oauth/2.0/token';
-    this.ocrUrl = 'https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic';
-    this.tokenFile = 'baidu_ocr_token.json';
-    this.tokenExpiryDays = 20;
-  }
-
-  async getAccessToken() {
-    const maxRetries = 3;
-    let retryDelay = 1;
-
-    for (let retry = 0; retry < maxRetries; retry++) {
-      try {
-        if (fsSync.existsSync(this.tokenFile)) {
-          const content = await fs.readFile(this.tokenFile, 'utf8');
-          const tokenData = JSON.parse(content);
-          const now = Date.now() / 1000;
-
-          if (now < tokenData.expire_time) {
-            const remain = (tokenData.expire_time - now) / 3600;
-            console.log(`使用缓存token，剩余 ${remain.toFixed(1)} 小时`);
-            return tokenData.access_token;
-          } else {
-            console.log('token 已过期，删除缓存');
-            await fs.unlink(this.tokenFile);
-          }
-        }
-      } catch (e) {
-        console.error('读取token缓存失败', e);
-        try {
-          await fs.unlink(this.tokenFile);
-        } catch {}
-      }
-
-      try {
-        console.log(`重新获取token ${retry + 1}/${maxRetries}`);
-        const res = await axios.get(this.tokenUrl, {
-          params: {
-            grant_type: 'client_credentials',
-            client_id: this.apiKey,
-            client_secret: this.secretKey
-          },
-          timeout: 10000
-        });
-
-        const data = res.data;
-        if (data.access_token) {
-          const tokenData = {
-            access_token: data.access_token,
-            expire_time: Date.now() / 1000 + this.tokenExpiryDays * 86400
-          };
-          await fs.writeFile(this.tokenFile, JSON.stringify(tokenData, null, 2), 'utf8');
-          console.log('获取token成功');
-          return data.access_token;
-        } else {
-          console.error('获取token失败', data);
-        }
-      } catch (e) {
-        console.error('请求token异常', e.message);
-      }
-
-      if (retry < maxRetries - 1) {
-        await this.sleep(retryDelay * 1000);
-        retryDelay *= 2;
-      }
-    }
-
-    console.error('token 获取失败，已达最大重试');
-    return null;
-  }
-
-  async recognizeBuffer(buffer) {
-    const token = await this.getAccessToken();
-    if (!token) return null;
-
-    try {
-      const base64 = buffer.toString('base64');
-
-      const maxRetries = 3;
-      let retryDelay = 2;
-
-      for (let retry = 0; retry < maxRetries; retry++) {
-        try {
-          const start = Date.now();
-          const res = await axios.post(
-            this.ocrUrl,
-            new URLSearchParams({ image: base64 }),
-            {
-              params: { access_token: token },
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-              timeout: 60000
-            }
-          );
-          const cost = (Date.now() - start) / 1000;
-
-          const isHtml = /<html|<!doctype html/i.test(res.data);
-          if (isHtml) {
-            console.error('返回HTML页面，视为504');
-            res.status = 504;
-          }
-
-          if (res.status === 200) {
-            const result = res.data;
-            if (result.words_result) {
-              console.log(`OCR 成功，${result.words_result.length} 行，耗时 ${cost}s`);
-              const fullText = this.extractText(result);
-              console.log('识别文本：', fullText);
-
-              const numInfo = this.extractSpecialNumbers(fullText);
-              console.log('提取数字：', numInfo);
-
-              return { fullText, ...numInfo, raw: result };
-            } else if (result.error_code === 110) {
-              console.error('token 失效，清除缓存');
-              await fs.unlink(this.tokenFile).catch(() => {});
-              return this.recognizeBuffer(buffer);
-            } else {
-              console.error('OCR 返回错误', result);
-            }
-          }
-        } catch (e) {
-          console.error(`OCR 请求异常 ${retry + 1}/${maxRetries}`, e.message);
-        }
-
-        if (retry < maxRetries - 1) {
-          await this.sleep(retryDelay * 1000);
-          retryDelay *= 2;
-        }
-      }
-    } catch (e) {
-      console.error('处理图片失败', e);
-    }
-
-    console.error('OCR 失败，已达最大重试');
-    return null;
-  }
-
-  extractText(ocrResult) {
-    if (!ocrResult?.words_result) return '';
-    return ocrResult.words_result
-      .map(item => (item.words || '').replace(/\s+/g, ''))
-      .join('');
-  }
-
-  extractSpecialNumbers(text) {
-    const s = text.replace(/\s+/g, '');
-    const match63 = s.match(/\d{63}/);
-    if (match63) {
-      return { number: match63[0], length: '63', fullText: text };
-    }
-    return { number: null, length: null, fullText: text };
-  }
-
-  sleep(ms) {
-    return new Promise(r => setTimeout(r, ms));
-  }
-}
 
 const app = express();
 app.use(cors());
@@ -180,39 +12,109 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // ====================== 配置 ======================
+const CONFIG_PATH = path.join(process.cwd(), 'config.json');
+let LOG_PASSWORD = '123456';
 const PORT = process.env.PORT || 9567;
-const KV_DIR = path.join(__dirname, 'kv_logs');
+const KV_DIR = path.join(process.cwd(), 'kv_logs');
 const BATCH_SIZE = 20;
 const BATCH_FLUSH_SECONDS = 300;
 const MAX_BATCH_READ = 50;
 const PAGE_SIZE = 20;
 const TIMEZONE = 8;
 
-// ====================== 新增：登录密码持久化配置（仅新增部分） ======================
-const PWD_FILE = path.join(__dirname, 'password.json');
-let LOG_PASSWORD = '123456'; // 默认初始密码
+// 密码持久化
+async function initConfig() {
+  try { await fs.access(CONFIG_PATH); const c=JSON.parse(await fs.readFile(CONFIG_PATH,'utf8')); if(c.password)LOG_PASSWORD=c.password; }
+  catch { await fs.writeFile(CONFIG_PATH,JSON.stringify({password:LOG_PASSWORD},null,2),'utf8'); }
+}
+async function savePassword(newPwd) {
+  await fs.writeFile(CONFIG_PATH,JSON.stringify({password:newPwd},null,2),'utf8');
+  LOG_PASSWORD = newPwd;
+}
+initConfig();
 
-// 初始化密码：读取本地文件，不存在则创建默认密码
-async function initPassword() {
+// ====================== 百度 OCR 配置（仅保留 API_KEY + SECRET_KEY，无APP ID） ======================
+const BAIDU_API_KEY = "OFClXkRRS9TRRTDvnKMk4TS1";
+const BAIDU_SECRET_KEY = "cyWM6fnvKn5eeLAR6WBGZwYkU2OufuOJ";
+
+// 启动校验：仅校验必填的 API_KEY / SECRET_KEY
+if (!BAIDU_API_KEY || !BAIDU_SECRET_KEY) {
+  console.error('❌ 错误：百度OCR授权信息未配置！');
+  console.error('✅ 请填写 BAIDU_API_KEY / BAIDU_SECRET_KEY');
+  process.exit(1);
+}
+
+// ====================== 百度OCR HTTP接口实现 ======================
+let baiduAccessToken = null;
+let baiduTokenExpireTime = 0;
+
+/**
+ * 获取百度OCR AccessToken
+ */
+async function getBaiduAccessToken() {
+  if (baiduAccessToken && Date.now() < baiduTokenExpireTime) {
+    return baiduAccessToken;
+  }
+
+  const tokenUrl = "https://aip.baidubce.com/oauth/2.0/token";
+  const params = new URLSearchParams();
+  params.append("grant_type", "client_credentials");
+  params.append("client_id", BAIDU_API_KEY);
+  params.append("client_secret", BAIDU_SECRET_KEY);
+
+  const resp = await fetch(tokenUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params
+  });
+
+  const data = await resp.json();
+  if (data.error) throw new Error(`获取Token失败：${data.error_description}`);
+
+  baiduAccessToken = data.access_token;
+  baiduTokenExpireTime = Date.now() + (data.expires_in - 60) * 1000;
+  return baiduAccessToken;
+}
+
+/**
+ * 百度高精度OCR识别
+ */
+async function baiduAccurateBasicOcr(base64Image) {
+  const pureBase64 = base64Image.replace(/^data:image\/\w+;base64,/, '');
+  
+  const token = await getBaiduAccessToken();
+  const ocrUrl = "https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic";//普通版 general_basic  高精度版accurate_basic
+  
+  const params = new URLSearchParams();
+  params.append("image", pureBase64);
+  params.append("access_token", token);
+  params.append("language_type", "CHN_ENG");
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
   try {
-    await fs.access(PWD_FILE);
-    const data = await fs.readFile(PWD_FILE, 'utf8');
-    const pwdData = JSON.parse(data);
-    if (pwdData.password) LOG_PASSWORD = pwdData.password;
-  } catch {
-    await fs.writeFile(PWD_FILE, JSON.stringify({ password: LOG_PASSWORD }, null, 2), 'utf8');
+    const resp = await fetch(ocrUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params,
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+    const result = await resp.json();
+    
+    if (result.error_code) {
+      throw new Error(`OCR失败[${result.error_code}]：${result.error_msg}`);
+    }
+    return result;
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      throw new Error('OCR请求超时');
+    }
+    throw e;
   }
 }
-initPassword();
-
-// 保存新密码到本地文件
-async function saveNewPassword(newPwd) {
-  await fs.writeFile(PWD_FILE, JSON.stringify({ password: newPwd }, null, 2), 'utf8');
-  LOG_PASSWORD = newPwd; // 更新内存密码
-}
-
-// 实例化OCR
-const ocrService = new BaiduOcrService();
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -263,7 +165,9 @@ async function c1(t, e) {
 }
 
 function GenerateSessionId() {
-  return 'app_' + Math.random().toString(36).slice(2, 15);
+  const t = Date.now().toString(36);
+  const e = Math.random().toString(36).substr(2, 9);
+  return `app_${t}_${e}`;
 }
 
 async function safeParse(resp) {
@@ -271,17 +175,30 @@ async function safeParse(resp) {
   try { return JSON.parse(text); } catch { return { raw: text }; }
 }
 
-function getFormatTime(offset = 8) {
+function getFormatTime(offset = TIMEZONE) {
   const now = new Date();
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const tz = new Date(utc + 3600000 * offset);
-  return tz.toISOString().replace('T', ' ').slice(0, 19);
+  const utcTimestamp = now.getTime() + now.getTimezoneOffset() * 60000;
+  const targetTime = new Date(utcTimestamp + 3600000 * offset);
+  const year = targetTime.getFullYear();
+  const month = String(targetTime.getMonth() + 1).padStart(2, '0');
+  const day = String(targetTime.getDate()).padStart(2, '0');
+  const hours = String(targetTime.getHours()).padStart(2, '0');
+  const minutes = String(targetTime.getMinutes()).padStart(2, '0');
+  const seconds = String(targetTime.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
-// ====================== IID 提取规则（修正：过滤无关数字，优先7位组→6位组） ======================
+function getClientIp(req) {
+  const forwardedIp = req.headers['x-forwarded-for'];
+  if (forwardedIp) {
+    return forwardedIp.split(',')[0].trim();
+  }
+  return req.ip || 'unknown';
+}
+
+// ====================== IID 提取规则 ======================
 function extractIIDs(text) {
   const results = [];
-
   let filteredText = text.replace(/\b(800|400)\d{1,7}\b/g, '');
   filteredText = filteredText.replace(/\b\d{1,5}\b|\b\d{8,9}\b/g, '');
 
@@ -295,7 +212,6 @@ function extractIIDs(text) {
     const c = s.replace(/\s+/g, '');
     if (c.length === 63) results.push(c);
   }
-
   for (const s of m54) {
     const c = s.replace(/\s+/g, '');
     if (c.length === 54) results.push(c);
@@ -303,14 +219,10 @@ function extractIIDs(text) {
 
   const nums = filteredText.match(/\d{54,63}/g) || [];
   for (const n of nums) {
-    if (n.length === 63) {
-      results.push(n);
-    }
+    if (n.length === 63) results.push(n);
   }
   for (const n of nums) {
-    if (n.length === 54) {
-      results.push(n);
-    }
+    if (n.length === 54) results.push(n);
   }
 
   const allDigits = filteredText.replace(/\D/g, '');
@@ -383,13 +295,31 @@ async function clearAllLogs() {
 }
 
 // ====================== 页面 ======================
-function loginPage() {
-  return `<!DOCTYPE html><meta charset="utf-8"><title>登录</title><style>body{display:grid;place-items:center;height:100vh;margin:0}.box{padding:24px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);width:320px}input,button{width:100%;padding:10px;margin:8px 0;border-radius:6px;border:1px solid #ddd}button{background:#0066cc;color:white;border:none;cursor:pointer}</style><div class="box"><h3>日志后台登录</h3><form method="post"><input type="password" name="pwd" required placeholder="密码"><button>登录</button></form></div>`;
+function loginPage(msg = '') {
+  return `<!DOCTYPE html><meta charset="utf-8"><title>登录</title><style>body{display:grid;place-items:center;height:100vh;margin:0}.box{padding:24px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);width:320px}input,button{width:100%;padding:10px;margin:8px 0;border-radius:6px;border:1px solid #ddd}button{background:#0066cc;color:white;border:none;cursor:pointer}.msg{color:green;text-align:center;margin:8px 0}.err{color:red}</style><div class="box"><h3>日志后台登录</h3>${msg ? `<div class="${msg.includes('成功') ? 'msg' : 'err'}">${msg}</div>` : ''}<form method="post"><input type="password" name="pwd" required placeholder="密码"><button>登录</button></form></div>`;
 }
 
-// 新增：修改密码页面
-function changePwdPage() {
-  return `<!DOCTYPE html><meta charset="utf-8"><title>修改登录密码</title><style>body{display:grid;place-items:center;height:100vh;margin:0}.box{padding:24px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);width:320px}input,button{width:100%;padding:10px;margin:8px 0;border-radius:6px;border:1px solid #ddd}button{background:#0066cc;color:white;border:none;cursor:pointer}.btn-gray{background:#6c757d}.red{background:red}</style><div class="box"><h3>修改登录密码</h3><form method="post" id="pwdForm"><input type="password" name="oldPwd" required placeholder="当前密码"><input type="password" name="newPwd" required placeholder="新密码（≥6位）" minlength="6"><input type="password" name="confirmPwd" required placeholder="确认新密码" minlength="6"><button type="submit">确认修改</button><button type="button" class="btn-gray" onclick="location.href='/logs'">返回日志后台</button></form><script>document.getElementById('pwdForm').onsubmit=function(e){const newP=document.querySelector('[name=newPwd]').value;const cP=document.querySelector('[name=confirmPwd]').value;if(newP!==cP){alert('两次密码不一致');e.preventDefault();}}</script></div>`;
+function changePasswordPage(msg = '') {
+  return `<!DOCTYPE html><meta charset="utf-8"><title>修改登录密码</title>
+<style>
+body{display:grid;place-items:center;height:100vh;margin:0;background:#fafafa}
+.box{padding:24px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);width:380px}
+input,button{width:100%;padding:10px;margin:8px 0;border-radius:6px;border:1px solid #ddd}
+button{background:#0066cc;color:white;border:none;cursor:pointer}
+.back{background:#6c757d;margin-top:10px}
+.msg{color:red;text-align:center;margin:8px 0}
+</style>
+<div class="box">
+  <h3>修改日志后台密码</h3>
+  ${msg ? `<div class="msg">${msg}</div>` : ''}
+  <form method="post">
+    <input type="password" name="oldPwd" required placeholder="请输入旧密码">
+    <input type="password" name="newPwd" required placeholder="请输入新密码">
+    <input type="password" name="confirmPwd" required placeholder="请确认新密码">
+    <button type="submit">确认修改</button>
+    <button type="button" class="back" onclick="location.href='/logs'">返回日志页</button>
+  </form>
+</div>`;
 }
 
 function logPage(logs, page, totalPages, search) {
@@ -421,7 +351,6 @@ body{margin:20px;font-family:system-ui;background:#fafafa}
 .bar{display:flex;gap:10px;margin:10px 0}
 input{flex:1;padding:8px;border-radius:6px;border:1px solid #ddd}
 button{padding:8px 12px;border:none;border-radius:6px;color:white;cursor:pointer}
-.btn-gray{background:#6c757d}
 .red{background:red}
 table{width:100%;border-collapse:collapse}
 th,td{padding:10px;border:1px solid #eee}
@@ -441,7 +370,7 @@ th,td{padding:10px;border:1px solid #eee}
   <div class="bar">
     <input id="s" value="${search}" placeholder="搜索 IID">
     <button onclick="location.href='?search='+encodeURIComponent(document.getElementById('s').value)">搜索</button>
-    <button class="btn-gray" onclick="location.href='/logs/change-pwd'">修改密码</button>
+    <a href="/logs/change-password"><button style="background:#0066cc;color:white;border:none;padding:8px 12px;border-radius:6px;cursor:pointer">修改密码</button></a>
     <a href="/logs/clear"><button class="red">清空全部</button></a>
   </div>
   <div style="margin:10px 0">${pages.join('')}</div>
@@ -662,21 +591,17 @@ async function sendActivationRequest(IID) {
   return { status: res.status, success: res.ok, data: await safeParse(res) };
 }
 
-// ====================== OCR 接口（已替换为你的新版） ======================
+// ====================== OCR 接口 ======================
 app.post('/api/ocr-iid', upload.single('image'), async (req, res) => {
   try {
-    const ocrRes = await ocrService.recognizeBuffer(req.file.buffer);
-    if (!ocrRes) return res.json({ error: "OCR识别失败" });
-
-    const iid = ocrRes.number;
-    if (!iid) {
-      const iids = extractIIDs(ocrRes.fullText);
-      if (iids.length === 0) return res.json({ error: "未识别到IID", ocrText: ocrRes.fullText });
-      iid = iids[0];
-    }
-
-    const result = await sendActivationRequest(iid);
-    logBatch.push({ id: crypto.randomUUID(), time: getFormatTime(), IID: iid, ip: req.ip, result });
+    const base64 = req.file.buffer.toString('base64');
+    const ocr = await baiduAccurateBasicOcr(base64);
+    const text = ocr.words_result?.map(p => p.words).join('\n') || '';
+    const iids = extractIIDs(text);
+    if (iids.length === 0) return res.json({ error: "未识别到IID", ocrText: text });
+    const first = iids[0];
+    const result = await sendActivationRequest(first);
+    logBatch.push({ id: crypto.randomUUID(), time: getFormatTime(), IID: first, ip: getClientIp(req), result });
     if (needFlush()) flushBatch();
     return res.json(result);
   } catch (e) {
@@ -686,15 +611,31 @@ app.post('/api/ocr-iid', upload.single('image'), async (req, res) => {
 
 app.post('/api/ocr-only', upload.single('image'), async (req, res) => {
   try {
-    const ocrRes = await ocrService.recognizeBuffer(req.file.buffer);
-    if (!ocrRes) return res.json({ error: "OCR识别失败" });
-    res.json({ ocrText: ocrRes.fullText, extractedNumber: ocrRes.number });
+    const base64 = req.file.buffer.toString('base64');
+    const ocr = await baiduAccurateBasicOcr(base64);
+    const text = ocr.words_result?.map(p => p.words).join('\n') || '';
+    res.json({ ocrText: text });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 // ====================== 路由 ======================
+app.all('/logs/change-password', async (req, res) => {
+  if (!isAuth(req)) return res.send(loginPage());
+  if (req.method === 'POST') {
+    const { oldPwd, newPwd, confirmPwd } = req.body;
+    if (oldPwd !== LOG_PASSWORD) return res.send(changePasswordPage('❌ 旧密码错误'));
+    if (newPwd !== confirmPwd) return res.send(changePasswordPage('❌ 两次密码不一致'));
+    if (!newPwd.trim()) return res.send(changePasswordPage('❌ 新密码不能为空'));
+    await savePassword(newPwd.trim());
+    
+    res.clearCookie('log_token', { path: '/logs' });
+    return res.redirect('/logs?msg=密码修改成功，请使用新密码登录');
+  }
+  res.send(changePasswordPage());
+});
+
 app.get('/logs/clear', async (req, res) => {
   if (!isAuth(req)) return res.sendStatus(403);
   await clearAllLogs();
@@ -708,38 +649,8 @@ app.post('/logs/delete', async (req, res) => {
   res.send('ok');
 });
 
-// 新增：修改密码页面路由
-app.get('/logs/change-pwd', async (req, res) => {
-  if (!isAuth(req)) return res.sendStatus(403);
-  res.send(changePwdPage());
-});
-
-// 新增：修改密码接口路由
-app.post('/logs/change-pwd', async (req, res) => {
-  if (!isAuth(req)) return res.sendStatus(403);
-  const { oldPwd, newPwd, confirmPwd } = req.body;
-  
-  // 验证当前密码
-  if (oldPwd !== LOG_PASSWORD) {
-    return res.send(`<script>alert('当前密码错误');location.href='/logs/change-pwd'</script>`);
-  }
-  // 验证两次密码一致
-  if (newPwd !== confirmPwd) {
-    return res.send(`<script>alert('两次输入的新密码不一致');location.href='/logs/change-pwd'</script>`);
-  }
-  // 验证密码长度
-  if (newPwd.length < 6) {
-    return res.send(`<script>alert('密码长度不能小于6位');location.href='/logs/change-pwd'</script>`);
-  }
-
-  // 保存新密码
-  await saveNewPassword(newPwd);
-  // 清除登录状态，重新登录
-  res.clearCookie('log_token', { path: '/logs' });
-  res.send(`<script>alert('密码修改成功！请使用新密码重新登录');location.href='/logs'</script>`);
-});
-
 app.all('/logs', async (req, res) => {
+  const msg = req.query.msg || '';
   if (req.method === 'POST') {
     const pwd = req.body.pwd;
     if (pwd === LOG_PASSWORD) {
@@ -747,8 +658,9 @@ app.all('/logs', async (req, res) => {
         path: '/logs', httpOnly: true, maxAge: 86400, sameSite: 'lax'
       }).redirect('/logs');
     }
+    return res.send(loginPage('❌ 密码错误'));
   }
-  if (!isAuth(req)) return res.send(loginPage());
+  if (!isAuth(req)) return res.send(loginPage(msg));
   await flushBatch();
   const search = req.query.search || '';
   const page = parseInt(req.query.page) || 1;
@@ -767,7 +679,7 @@ app.all('/', async (req, res) => {
     const result = await sendActivationRequest(IID);
     logBatch.push({
       id: crypto.randomUUID(),
-      time: getFormatTime(TIMEZONE),
+      time: getFormatTime(),
       IID, ip, result
     });
     if (needFlush()) flushBatch();
@@ -778,10 +690,10 @@ app.all('/', async (req, res) => {
 });
 
 // ====================== 启动 ======================
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ 服务已启动：http://127.0.0.1:${PORT}`);
-  console.log(`🔑 日志后台当前密码：${LOG_PASSWORD}`);
-  console.log(`📷 已使用你提供的新版百度OCR类`);
-  console.log(`📷 新增：图片OCR识别 → 自动获取CID`);
-  console.log(`🔒 新增：日志后台密码修改功能`);
+  console.log(`🌐 公网/IP访问：http://【你的服务器IP】:${PORT}`);
+  console.log(`🔑 日志后台密码：${LOG_PASSWORD}`);
+  console.log(`📷 OCR接口：https://aip.baidubce.com/rest/2.0/ocr/v1/accurate_basic`);
+  console.log(`🔐 已移除百度APP ID，仅使用 API_KEY + SECRET_KEY`);
 });
