@@ -1,6 +1,7 @@
 # IID 激活确认 ID 工具
 基于 Cloudflare Workers 搭建的轻量级 IID 激活查询工具，通过调用微软官方接口获取确认 ID，支持批量查询、日志管理、权限验证。
 
+## 版本说明
 - 根目录workers.js为coloudflare部署方案  
 - nodejs_ocr目录下使用nodejs方案带有ocr图像识别功能，可部署到自己的服务器。
 
