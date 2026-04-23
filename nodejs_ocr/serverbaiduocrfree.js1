@@ -262,20 +262,27 @@ async function getAllLogs() {
 async function deleteLogById(targetId) {
   if (!targetId) return false;
   const files = await fs.readdir(KV_DIR);
+  let deleted = false;
+
   for (const f of files) {
     const file = path.join(KV_DIR, f);
     try {
       const txt = await fs.readFile(file, 'utf8');
       const arr = JSON.parse(txt);
+      if (!Array.isArray(arr)) continue;
+
       const filtered = arr.filter(x => x.id !== targetId);
       if (filtered.length !== arr.length) {
-        if (filtered.length === 0) await fs.unlink(file);
-        else await fs.writeFile(file, JSON.stringify(filtered), 'utf8');
-        return true;
+        deleted = true;
+        if (filtered.length === 0) {
+          await fs.unlink(file);
+        } else {
+          await fs.writeFile(file, JSON.stringify(filtered), 'utf8');
+        }
       }
-    } catch { }
+    } catch (e) {}
   }
-  return false;
+  return deleted;
 }
 
 async function clearAllLogs() {
@@ -636,7 +643,16 @@ app.get('/logs/clear', async (req, res) => {
 
 app.post('/logs/delete', async (req, res) => {
   if (!isAuth(req)) return res.sendStatus(403);
-  const id = req.body.toString();
+  
+  // 🔥 终极修复：express.json() 无法直接读取纯文本，必须用这种方式拿
+  let id = '';
+  try {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    id = Buffer.concat(chunks).toString('utf8').trim();
+  } catch (e) {}
+
+  if (!id) return res.send('no id');
   await deleteLogById(id);
   res.send('ok');
 });
