@@ -421,7 +421,7 @@ button{padding:12px 16px;border-radius:10px;border:none;background:#0078d4;color
   <div class="result" id="resultBox"></div>
 </div>
 
-<div class="footer">本工具后端服务器通过官方接口获取确认ID<br>仅用于合法授权设备激活<br><br><a href="/logs">日志后台管理</a></div>
+<div class="footer">本工具后端服务器通过官方接口获取确认ID<br>仅用于合法授权设备激活<br><br><a href="/logs">日志后台管理</a><br><br>本页面使用<a href="https://github.com/wpyok168/cfgetcid" target="_blank">Github</a>开源项目进行部署，如果需要可以自行部署</div>
 <div class="toast" id="toast"></div>
 
 <script>
