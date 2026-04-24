@@ -40,7 +40,7 @@ app.use(globalLimiter);
 const BLACKLIST_ENABLE = true; //启用黑名单过滤
 const BLACKLIST_AUTO_ENABLE = true; // 自动黑名单 默认关闭false
 const BLACKLIST_AUTO_TIME = 10 * 60 * 1000; // 自动封禁 10分钟
-const IP_RECORD_LIMIT = 80; // 单IP1分钟内超限则拉黑
+const IP_RECORD_LIMIT = 80; // 单IP 1分钟内超限则拉黑
 
 // 手动黑名单
 let BLACKLIST = [
@@ -80,7 +80,7 @@ setInterval(() => {
 }, 60 * 1000);
 
 // IP拦截中间件（手动黑名单 + 自动黑名单）
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
   const ip = getClientIp(req);
   const now = Date.now();
   
