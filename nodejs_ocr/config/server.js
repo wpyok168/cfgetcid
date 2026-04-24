@@ -134,6 +134,10 @@ async function savePassword(newPwd) {
 initConfig();
 
 // OCR
+if (!config.BAIDU_API_KEY || !config.BAIDU_SECRET_KEY) {
+  console.error('❌ 错误：百度OCR授权信息未配置！');
+  process.exit(1);
+}
 let baiduAccessToken = null;
 let baiduTokenExpireTime = 0;
 
@@ -153,6 +157,8 @@ async function getBaiduAccessToken() {
     });
 
     const data = res.data;
+    if (data.error) throw new Error(`获取Token失败：${data.error_description}`);
+
     baiduAccessToken = data.access_token;
     baiduTokenExpireTime = Date.now() + (data.expires_in - 60) * 1000;
     return baiduAccessToken;
@@ -162,19 +168,28 @@ async function getBaiduAccessToken() {
 }
 
 async function baiduAccurateBasicOcr(base64Image) {
-  const pureBase64 = base64Image.replace(/^data:image\/\w+;base64,/, '');
-  const token = await getBaiduAccessToken();
+  // 🔥 修复：补上 try {
+  try {
+    const pureBase64 = base64Image.replace(/^data:image\/\w+;base64,/, '');
+    const token = await getBaiduAccessToken();
 
-  const params = new URLSearchParams();
-  params.append('image', pureBase64);
-  params.append('language_type', 'CHN_ENG');
+    const params = new URLSearchParams();
+    params.append('image', pureBase64);
+    params.append('language_type', 'CHN_ENG');
 
-  const res = await axios.post(`${config.ocrUrl}?access_token=${token}`, params, {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    timeout: 10000
-  });
+    const res = await axios.post(`${config.ocrUrl}?access_token=${token}`, params, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      timeout: 10000
+    });
 
-  return res.data;
+    const result = res.data;
+    if (result.error_code) {
+      throw new Error(`OCR失败[${result.error_code}]：${result.error_msg}`);
+    }
+    return result;
+  } catch (e) {
+    throw new Error(e.message || 'OCR请求失败');
+  }
 }
 
 // 上传
@@ -242,7 +257,7 @@ function GenerateSessionId() {
 function getFormatTime(offset = config.TIMEZONE) {
   const now = new Date();
   const utcTimestamp = now.getTime() + now.getTimezoneOffset() * 60000;
-  const targetTime = new utcTimestamp + 3600000 * offset;
+  const targetTime = new Date(utcTimestamp + 3600000 * offset);
   const year = targetTime.getFullYear();
   const month = String(targetTime.getMonth() + 1).padStart(2, '0');
   const day = String(targetTime.getDate()).padStart(2, '0');
@@ -452,8 +467,20 @@ function showDetail(s){ try{const r=JSON.parse(decodeURIComponent(s));$('#detail
 function closeDetailModal(){ $('#detailModal').style.display='none'; }
 async function copyDetailJson(){ const txt=$('#detailContent').textContent; if(!txt){toast('暂无内容');return;} try{await navigator.clipboard.writeText(txt);toast('已复制');}catch{toast('复制失败');} }
 async function del(id){ if(!confirm('确认删除？'))return; await fetch('/logs/delete',{method:'POST',body:id}); location.reload(); }
-async function blockIp(ip){ if(!confirm('确认拉黑该IP：'+ip+'？')) return; await fetch('/logs/block-ip', {method:'POST', body:ip}); toast('已拉黑'); }
-async function unblockIp(ip){ if(!confirm('确认解封该IP：'+ip+'？')) return; await fetch('/logs/unblock-ip', {method:'POST', body:ip}); toast('已解封'); }
+
+// 拉黑IP
+async function blockIp(ip){
+  if(!confirm('确认拉黑该IP：'+ip+'？')) return;
+  await fetch('/logs/block-ip', {method:'POST', body:ip});
+  toast('已拉黑');
+}
+
+// 解封IP
+async function unblockIp(ip){
+  if(!confirm('确认解封该IP：'+ip+'？')) return;
+  await fetch('/logs/unblock-ip', {method:'POST', body:ip});
+  toast('已解封');
+}
 </script>`;
 }
 
@@ -518,65 +545,113 @@ const $ = s => document.querySelector(s);
 const toast = msg => { const t=$('#toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000); };
 let currentFile = null;
 const preview = $('#preview');
+
+// 清空所有（含图片）
 $('#clearAllBtn').onclick = () => {
-  $('#iids').value = ''; $('#resultBox').textContent = ''; $('#status').textContent = '';
-  currentFile = null; preview.src = ''; preview.style.display = 'none'; toast('已清空全部内容');
+  $('#iids').value = '';
+  $('#resultBox').textContent = '';
+  $('#status').textContent = '';
+  
+  // 清空图片
+  currentFile = null;
+  preview.src = '';
+  preview.style.display = 'none';
+  
+  toast('已清空全部内容');
 };
+
+// 复制结果
 $('#copyBtn').onclick = async () => {
-  const txt = $('#resultBox').textContent; if (!txt) { toast('无内容可复制'); return; }
-  await navigator.clipboard.writeText(txt); toast('已复制');
+  const txt = $('#resultBox').textContent;
+  if (!txt) { toast('无内容可复制'); return; }
+  await navigator.clipboard.writeText(txt);
+  toast('已复制');
 };
+
+// 批量获取CID
 $('#runBtn').onclick = async () => {
   const text = $('#iids').value;
   const lines = text.split('\\n').map(i => i.trim().replace(/\\D/g, '')).filter(Boolean);
   if (!lines.length) { toast('请输入 IID'); return; }
-  const btn = $('#runBtn'); btn.disabled = true; btn.textContent = '处理中...';
+  
+  const btn = $('#runBtn');
+  btn.disabled = true;
+  btn.textContent = '处理中...';
+  
   const out = [];
   for (const iid of lines) {
     $('#status').textContent = '处理：' + iid;
     try {
       const r = await fetch('/', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ IID: iid })
       });
       const j = await r.json();
       out.push(JSON.stringify(j, null, 2) + '\\n------------------------------------\\n');
-    } catch (e) { out.push('请求失败\\n------------------------------------\\n'); }
+    } catch (e) {
+      out.push('请求失败\\n------------------------------------\\n');
+    }
   }
   $('#resultBox').textContent = out.join('');
   $('#status').textContent = '完成：' + lines.length + ' 条';
-  btn.disabled = false; btn.textContent = '批量获取'; toast('完成');
+  btn.disabled = false;
+  btn.textContent = '批量获取';
+  toast('完成');
 };
-document.addEventListener('paste', e => { const f = e.clipboardData.files[0]; if (f) setFile(f); });
+
+// 粘贴图片
+document.addEventListener('paste', e => {
+  const f = e.clipboardData.files[0];
+  if (f) setFile(f);
+});
+
+// 拖拽
 ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
   $('#ocrBox').addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); });
 });
 $('#ocrBox').addEventListener('drop', e => setFile(e.dataTransfer.files[0]));
+
+// 选择图片
 $('#imgFile').onchange = e => setFile(e.target.files[0]);
-function setFile(f) { currentFile = f; preview.src = URL.createObjectURL(f); preview.style.display = 'block'; toast('图片已加载'); }
+
+function setFile(f) {
+  currentFile = f;
+  preview.src = URL.createObjectURL(f);
+  preview.style.display = 'block';
+  toast('图片已加载');
+}
+
+// OCR + IID + CID
 $('#btnOcrIid').onclick = async () => {
   if (!currentFile) { toast('请选择图片'); return; }
-  const fd = new FormData(); fd.append('image', currentFile);
+  const fd = new FormData();
+  fd.append('image', currentFile);
   $('#status').textContent = 'OCR识别中...';
   const res = await fetch('/api/ocr-iid', { method: 'POST', body: fd });
   const json = await res.json();
   $('#resultBox').textContent = JSON.stringify(json, null, 2);
-  $('#status').textContent = '完成'; toast('完成');
+  $('#status').textContent = '完成';
+  toast('完成');
 };
+
+// 仅OCR
 $('#btnOcrOnly').onclick = async () => {
   if (!currentFile) { toast('请选择图片'); return; }
-  const fd = new FormData(); fd.append('image', currentFile);
+  const fd = new FormData();
+  fd.append('image', currentFile);
   $('#status').textContent = 'OCR识别中...';
   const res = await fetch('/api/ocr-only', { method: 'POST', body: fd });
   const json = await res.json();
   $('#resultBox').textContent = JSON.stringify(json, null, 2);
-  $('#status').textContent = '完成'; toast('完成');
+  $('#status').textContent = '完成';
+  toast('完成');
 };
 </script>
 </body></html>`;
 }
 
-// 激活接口
+// ====================== 激活接口（axios版，无警告） ======================
 async function sendActivationRequest(IID) {
   if (!IID) throw new Error('missing IID');
   const dpop = await c1('/api/productActivation/validateIID', 'POST');
@@ -596,13 +671,14 @@ async function sendActivationRequest(IID) {
       },
       timeout: 10000
     });
+
     return { status: res.status, success: true, data: res.data };
   } catch (e) {
     return { status: e.response?.status || 500, success: false, data: e.message };
   }
 }
 
-// OCR 接口
+// ====================== OCR 接口 ======================
 app.post('/api/ocr-iid', upload.single('image'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: '请上传图片' });
@@ -632,30 +708,34 @@ app.post('/api/ocr-only', upload.single('image'), async (req, res) => {
   }
 });
 
-// 路由
-app.post('/logs/block-ip', async (req, res) => {
-  if (!isAuth(req)) return res.sendStatus(403);
+// ====================== 路由 ======================
+// 手动添加IP到黑名单（后台鉴权）
+app.post('/logs/block-ip', async (req,res)=>{
+  if(!isAuth(req)) return res.sendStatus(403);
   let ip = '';
-  try {
-    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+  try{
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
     ip = Buffer.concat(chunks).toString('utf8').trim();
-  } catch {}
-  if (!ip) return res.send('empty');
-  if (!BLACKLIST.includes(ip)) {
+  }catch{}
+  if(!ip) return res.send('empty');
+  if(!BLACKLIST.includes(ip)){
     BLACKLIST.push(ip);
     await saveBlackList();
   }
   res.send('ok');
 });
 
-app.post('/logs/unblock-ip', async (req, res) => {
-  if (!isAuth(req)) return res.sendStatus(403);
+// 移除黑名单IP
+app.post('/logs/unblock-ip', async (req,res)=>{
+  if(!isAuth(req)) return res.sendStatus(403);
   let ip = '';
-  try {
-    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+  try{
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
     ip = Buffer.concat(chunks).toString('utf8').trim();
-  } catch {}
-  BLACKLIST = BLACKLIST.filter(item => item !== ip);
+  }catch{}
+  BLACKLIST = BLACKLIST.filter(item=>item!==ip);
   await saveBlackList();
   res.send('ok');
 });
@@ -668,6 +748,7 @@ app.all('/logs/change-password', async (req, res) => {
     if (newPwd !== confirmPwd) return res.send(changePasswordPage('❌ 两次密码不一致'));
     if (!newPwd.trim()) return res.send(changePasswordPage('❌ 新密码不能为空'));
     await savePassword(newPwd.trim());
+    
     res.clearCookie('log_token', { path: '/logs' });
     return res.redirect('/logs?msg=密码修改成功，请使用新密码登录');
   }
@@ -684,9 +765,11 @@ app.post('/logs/delete', async (req, res) => {
   if (!isAuth(req)) return res.sendStatus(403);
   let id = '';
   try {
-    const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
     id = Buffer.concat(chunks).toString('utf8').trim();
   } catch (e) {}
+
   if (!id) return res.send('no id');
   await deleteLogById(id);
   res.send('ok');
