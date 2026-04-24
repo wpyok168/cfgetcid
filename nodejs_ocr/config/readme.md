@@ -1,3 +1,4 @@
+```
 {
   "PORT": 9567,                          // 服务运行端口
   "TIMEZONE": 8,                         // 时区：东八区（北京时间）
@@ -34,3 +35,4 @@
   "ADMIN_IP_WHITELIST_ENABLE": false,      // 日志后台IP白名单开关
   "ADMIN_ALLOW_IPS": ["127.0.0.1", "::1"] // 允许访问日志后台的IP
 }
+```
