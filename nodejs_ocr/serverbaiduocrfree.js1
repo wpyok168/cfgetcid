@@ -12,6 +12,132 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// ==============================================
+// 【安全防护：全局限流 + IP黑名单 + 后台白名单 + 错误捕获】
+// 不改动任何业务逻辑，纯防护
+// ==============================================
+const rateLimit = require('express-rate-limit');
+
+// 1. 全局限流：1 分钟最多 60 次请求（防CC攻击）
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  message: { error: '请求过于频繁，请稍后再试' }
+});
+
+// 2. 登录接口限流：5 分钟最多 10 次（防暴力破解）
+const loginLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 10,
+  message: { error: '登录尝试过多，请5分钟后再试' }
+});
+
+// 应用全局限流
+app.use(globalLimiter);
+
+// 3. IP 黑名单（攻击你的 IP 填这里，一行一个）
+const BLACKLIST_ENABLE = true; //启用黑名单过滤
+const BLACKLIST_AUTO_ENABLE = true; // 自动黑名单 默认关闭false
+const BLACKLIST_AUTO_TIME = 10 * 60 * 1000; // 自动封禁 10分钟
+const IP_RECORD_LIMIT = 80; // 单IP1分钟内超限则拉黑
+
+// 手动黑名单
+let BLACKLIST = [
+  // 示例：
+  // '1.2.3.4',
+  // '5.6.7.8'
+];
+
+// 自动IP访问记录 + 封禁列表
+const ipVisitMap = new Map();
+const autoBlockMap = new Map();
+const BLACKLIST_FILE = path.join(process.cwd(), 'blacklist.json');
+
+// 加载本地黑名单
+async function loadBlackList() {
+  try {
+    const txt = await fs.readFile(BLACKLIST_FILE, 'utf8');
+    const arr = JSON.parse(txt);
+    if(Array.isArray(arr)) BLACKLIST = arr;
+  } catch {}
+}
+// 保存黑名单
+async function saveBlackList() {
+  await fs.writeFile(BLACKLIST_FILE, JSON.stringify(BLACKLIST,null,2),'utf8');
+}
+loadBlackList();
+
+// 自动计数+自动封禁 定时清理
+setInterval(() => {
+  const now = Date.now();
+  // 清理过期访问计数
+  ipVisitMap.clear();
+  // 解封过期IP
+  for(const [ip, endTime] of autoBlockMap){
+    if(now > endTime) autoBlockMap.delete(ip);
+  }
+}, 60 * 1000);
+
+// IP拦截中间件（手动黑名单 + 自动黑名单）
+app.use((req, res, next) => {
+  const ip = getClientIp(req);
+  const now = Date.now();
+  
+  // 实时读取最新黑名单（解封立刻生效）
+  let realBlackList = [...BLACKLIST];
+  try {
+    const txt = await fs.readFile(BLACKLIST_FILE, 'utf8');
+    const arr = JSON.parse(txt);
+    if(Array.isArray(arr)) realBlackList = arr;
+  } catch {}
+
+  // 1. 自动封禁拦截
+  if(BLACKLIST_AUTO_ENABLE && autoBlockMap.has(ip)){
+    return res.status(403).end();
+  }
+
+  // 2. 手动黑名单拦截
+  if(BLACKLIST_ENABLE && BLACKLIST.includes(ip)){
+    return res.status(403).end();
+  }
+
+  // 3. 自动频率统计
+  if(BLACKLIST_AUTO_ENABLE){
+    const count = (ipVisitMap.get(ip) || 0) + 1;
+    ipVisitMap.set(ip, count);
+
+    // 超限自动拉黑
+    if(count >= IP_RECORD_LIMIT){
+      autoBlockMap.set(ip, now + BLACKLIST_AUTO_TIME);
+      return res.status(403).end();
+    }
+  }
+
+  next();
+});
+
+// 4. 日志后台 IP 白名单（只允许你自己访问 /logs，必填自己的公网IP）
+const ADMIN_IP_WHITELIST_ENABLE = false;
+const ADMIN_ALLOW_IPS = [
+  '127.0.0.1',
+  '::1',
+  // 在这里填【你自己的公网IP】，示例：'111.222.333.444'
+];
+app.use('/logs', (req, res, next) => {
+  // 开关关闭 => 直接放行
+  if (!ADMIN_IP_WHITELIST_ENABLE) return next();
+  
+  const ip = getClientIp(req);
+  if (!ADMIN_ALLOW_IPS.includes(ip)) {
+    return res.status(403).send('Forbidden');
+  }
+  next();
+});
+
+// 6. OCR 图片类型校验（只允许图片上传，防恶意文件）
+const ALLOW_MIME = ['image/jpeg', 'image/png', 'image/jpg', 'image/gif'];
+
 // ====================== 配置 ======================
 const CONFIG_PATH = path.join(process.cwd(), 'config.json');
 let LOG_PASSWORD = '123456';
@@ -102,7 +228,16 @@ async function baiduAccurateBasicOcr(base64Image) {
   }
 }
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+// 上传配置
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allow = ['image/jpeg', 'image/png', 'image/jpg', 'image/gif'];
+    if (allow.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('不支持的文件类型'), false);
+  }
+});
 
 // ====================== 日志批处理 ======================
 let logBatch = [];
@@ -178,10 +313,8 @@ function getFormatTime(offset = TIMEZONE) {
 }
 
 function getClientIp(req) {
-  const forwardedIp = req.headers['x-forwarded-for'];
-  if (forwardedIp) {
-    return forwardedIp.split(',')[0].trim();
-  }
+  const forwarded = (req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  if (forwarded && forwarded !== 'unknown') return forwarded;
   return req.ip || 'unknown';
 }
 
@@ -332,6 +465,8 @@ function logPage(logs, page, totalPages, search) {
       <button onclick="del('${item.id}')" style="background:red;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer">删除</button>
       <button onclick="searchIID('${encodeURIComponent(item.IID || '')}')" style="background:#6c757d;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;margin:0 2px">同IID</button>
       <button onclick="showDetail('${encodeURIComponent(JSON.stringify(item.result))}')" style="background:#0066cc;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;margin:0 2px">详情</button>
+      <button onclick="blockIp('${item.ip}')" style="background:#d32f2f;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;margin:0 2px">拉黑IP</button>
+      <button onclick="unblockIp('${item.ip}')" style="background:#388e3c;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;margin:0 2px">解封IP</button>
     </td>
   </tr>`).join('');
 
@@ -385,6 +520,20 @@ function showDetail(s){ try{const r=JSON.parse(decodeURIComponent(s));$('#detail
 function closeDetailModal(){ $('#detailModal').style.display='none'; }
 async function copyDetailJson(){ const txt=$('#detailContent').textContent; if(!txt){toast('暂无内容');return;} try{await navigator.clipboard.writeText(txt);toast('已复制');}catch{toast('复制失败');} }
 async function del(id){ if(!confirm('确认删除？'))return; await fetch('/logs/delete',{method:'POST',body:id}); location.reload(); }
+
+// 拉黑IP
+async function blockIp(ip){
+  if(!confirm('确认拉黑该IP：'+ip+'？')) return;
+  await fetch('/logs/block-ip', {method:'POST', body:ip});
+  toast('已拉黑');
+}
+
+// 解封IP
+async function unblockIp(ip){
+  if(!confirm('确认解封该IP：'+ip+'？')) return;
+  await fetch('/logs/unblock-ip', {method:'POST', body:ip});
+  toast('已解封');
+}
 </script>`;
 }
 
@@ -593,6 +742,7 @@ async function sendActivationRequest(IID) {
 // ====================== OCR 接口 ======================
 app.post('/api/ocr-iid', upload.single('image'), async (req, res) => {
   try {
+    if (!req.file) return res.status(400).json({ error: '请上传图片' });
     const base64 = req.file.buffer.toString('base64');
     const ocr = await baiduAccurateBasicOcr(base64);
     const text = ocr.words_result?.map(p => p.words).join('\n') || '';
@@ -620,6 +770,37 @@ app.post('/api/ocr-only', upload.single('image'), async (req, res) => {
 });
 
 // ====================== 路由 ======================
+// 手动添加IP到黑名单（后台鉴权）
+app.post('/logs/block-ip', async (req,res)=>{
+  if(!isAuth(req)) return res.sendStatus(403);
+  let ip = '';
+  try{
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    ip = Buffer.concat(chunks).toString('utf8').trim();
+  }catch{}
+  if(!ip) return res.send('empty');
+  if(!BLACKLIST.includes(ip)){
+    BLACKLIST.push(ip);
+    await saveBlackList();
+  }
+  res.send('ok');
+});
+
+// 移除黑名单IP
+app.post('/logs/unblock-ip', async (req,res)=>{
+  if(!isAuth(req)) return res.sendStatus(403);
+  let ip = '';
+  try{
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    ip = Buffer.concat(chunks).toString('utf8').trim();
+  }catch{}
+  BLACKLIST = BLACKLIST.filter(item=>item!==ip);
+  await saveBlackList();
+  res.send('ok');
+});
+
 app.all('/logs/change-password', async (req, res) => {
   if (!isAuth(req)) return res.send(loginPage());
   if (req.method === 'POST') {
@@ -657,6 +838,7 @@ app.post('/logs/delete', async (req, res) => {
   res.send('ok');
 });
 
+app.use('/logs', loginLimiter);
 app.all('/logs', async (req, res) => {
   const msg = req.query.msg || '';
   if (req.method === 'POST') {
@@ -693,6 +875,14 @@ app.all('/', async (req, res) => {
   }
 });
 
+// ==============================================
+// ✅ 全局错误捕获（必须放在所有路由最后！）
+// ==============================================
+app.use((err, req, res, next) => {
+  console.error('服务器异常：', err);
+  res.status(500).json({ error: 'server error' });
+});
+
 // ====================== 启动 ======================
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ 服务已启动：http://127.0.0.1:${PORT}`);
@@ -700,4 +890,5 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🔑 日志后台密码：${LOG_PASSWORD}`);
   console.log(`📷 新增：图片OCR识别 → 自动获取CID`);
   console.log(`🔐 新增：修改密码后强制重新登录`);
+  console.log(`🔐 新增：限流+图片上传类型限定+访问ip黑名单+日志白名单`);
 });
