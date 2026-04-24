@@ -101,30 +101,34 @@ app.use('/logs', (req, res, next) => {
   next();
 });
 
-// 密码持久化
+// ====================== 修复：密码存储（不会清空配置） ======================
 let LOG_PASSWORD = config.LOG_PASSWORD;
 
+// 初始化配置（只读取密码，不覆盖配置文件）
 async function initConfig() {
   try {
-    await fs.access(config.CONFIG_PATH);
-    const c = JSON.parse(await fs.readFile(config.CONFIG_PATH, 'utf8'));
-    if (c.password) LOG_PASSWORD = c.password;
-  } catch {
-    await fs.writeFile(
-      config.CONFIG_PATH,
-      JSON.stringify({ password: LOG_PASSWORD }, null, 2),
-      'utf8'
-    );
+    const currentConfig = JSON.parse(await fs.readFile(config.CONFIG_PATH, 'utf8'));
+    if (currentConfig.LOG_PASSWORD) {
+      LOG_PASSWORD = currentConfig.LOG_PASSWORD;
+    }
+  } catch (err) {
+    console.log("使用默认配置");
   }
 }
 
+// 保存密码（只修改密码，其他配置完全保留）
 async function savePassword(newPwd) {
-  await fs.writeFile(
-    config.CONFIG_PATH,
-    JSON.stringify({ password: newPwd }, null, 2),
-    'utf8'
-  );
-  LOG_PASSWORD = newPwd;
+  try {
+    // 读取完整配置
+    const currentConfig = JSON.parse(await fs.readFile(config.CONFIG_PATH, 'utf8'));
+    // 只改密码
+    currentConfig.LOG_PASSWORD = newPwd;
+    // 写回完整配置
+    await fs.writeFile(config.CONFIG_PATH, JSON.stringify(currentConfig, null, 2), 'utf8');
+    LOG_PASSWORD = newPwd;
+  } catch (err) {
+    console.error("保存密码失败", err);
+  }
 }
 
 initConfig();
