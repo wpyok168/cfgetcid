@@ -64,21 +64,20 @@ app.use(async (req, res, next) => {
   const ip = getClientIp(req);
   const now = Date.now();
 
-  let realBlackList = [...BLACKLIST];
-  try {
-    const txt = await fs.readFile(config.BLACKLIST_FILE, 'utf8');
-    const arr = JSON.parse(txt);
-    if (Array.isArray(arr)) realBlackList = arr;
-  } catch {}
+  // 🔥 不再每次读文件，直接用内存变量
+  const realBlackList = [...BLACKLIST];
 
+  // 临时自动封禁
   if (config.BLACKLIST_AUTO_ENABLE && autoBlockMap.has(ip)) {
     return res.status(403).end();
   }
 
+  // 永久黑名单
   if (config.BLACKLIST_ENABLE && realBlackList.includes(ip)) {
     return res.status(403).end();
   }
 
+  // 自动计数封禁
   if (config.BLACKLIST_AUTO_ENABLE) {
     const count = (ipVisitMap.get(ip) || 0) + 1;
     ipVisitMap.set(ip, count);
@@ -735,8 +734,15 @@ app.post('/logs/unblock-ip', async (req,res)=>{
     for await (const chunk of req) chunks.push(chunk);
     ip = Buffer.concat(chunks).toString('utf8').trim();
   }catch{}
+
+  // 🔥 移除永久黑名单
   BLACKLIST = BLACKLIST.filter(item=>item!==ip);
   await saveBlackList();
+
+  // 🔥 关键：同步清除临时封禁，做到实时
+  autoBlockMap.delete(ip);
+  ipVisitMap.delete(ip);
+
   res.send('ok');
 });
 
