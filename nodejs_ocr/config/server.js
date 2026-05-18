@@ -307,6 +307,47 @@ function extractIIDs(text) {
   return [...new Set(results)];
 }
 
+/**
+ * ✅ 获取 Token JSON 数据（供全局使用）
+ * @returns {Promise<Object>}
+ */
+async function getTokenData() {
+  try {
+    // 用你已有的 axios 发送请求，10秒超时
+    const response = await axios({
+      method: 'GET',
+      url: 'https://cidtoken.x2ray.cfd',
+      timeout: 10000, // 10 秒超时
+    });
+
+    const data = response.data;
+
+    // 校验返回数据是否有效
+    if (!data || !data.access_token) {
+      throw new Error('无效的 Token 数据');
+    }
+
+    return data;
+  } catch (err) {
+    let msg = '请求失败';
+
+    // 统一错误处理（和你原来逻辑完全一致）
+    if (err.code === 'ECONNABORTED') {
+      msg = '请求超时';
+    } else if (err.response) {
+      msg = `网络请求失败：HTTP 错误: ${err.response.status}`;
+    } else if (err.message.includes('JSON')) {
+      msg = `解析 JSON 失败：${err.message}`;
+    } else if (err.message === '无效的 Token 数据') {
+      msg = err.message;
+    } else {
+      msg = err.message;
+    }
+
+    throw new Error(msg);
+  }
+}
+
 // 日志写入
 async function flushBatch() {
   if (flushing || logBatch.length === 0) return;
@@ -655,6 +696,10 @@ async function sendActivationRequest(IID) {
   if (!IID) throw new Error('missing IID');
   const dpop = await c1('/api/productActivation/validateIID', 'POST');
   const sid = GenerateSessionId();
+  const tokenJson = await getTokenData();
+  if (!tokenJson || !tokenJson.access_token) {
+    throw new Error("获取 AccessToken 失败，请检查网络或接口");
+  }
 
   try {
     const res = await axios.post('https://visualsupport.microsoft.com/api/productActivation/validateIID', {
@@ -664,7 +709,8 @@ async function sendActivationRequest(IID) {
     }, {
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer govUrlID',
+        //'Authorization': 'Bearer govUrlID',
+        'Authorization': `Bearer ${tokenJson.access_token}`,
         'DPoP': dpop,
         'x-session-id': sid
       },
