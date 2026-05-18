@@ -564,6 +564,60 @@ $('#btnOcrOnly').onclick = async () => {
 </html>`;
 }
 
+/**
+ * 校验IID区块合法性
+ * @param {string} block - IID的单个区块
+ * @returns {boolean} 区块是否合法
+ */
+function checkBlock(block) {
+    if (!/^\d+$/.test(block) || block.length < 2) return false;
+
+    const check = Number(block.at(-1));
+    let sum = 0;
+
+    for (let i = 0; i < block.length - 1; i++) {
+        const d = Number(block[i]);
+        sum += i % 2 === 0 ? d : d * 2;
+    }
+
+    return sum % 7 === check;
+}
+
+/**
+ * 校验整个IID的合法性（增强版，返回具体错误信息）
+ * @param {string} iid - 待校验的IID字符串
+ * @returns {object} 校验结果 {valid: boolean, error?: string, failedBlocks?: array}
+ */
+function validateIID(iid) {
+    // 检查是否全为数字
+    if (!/^\d+$/.test(iid))
+        return { valid: false, error: "not_numeric" };
+
+    // 检查长度是否为54或63位
+    if (iid.length !== 54 && iid.length !== 63)
+        return { valid: false, error: "invalid_length", length: iid.length };
+
+    // 检查每个区块的合法性
+    const blockSize = iid.length / 9;
+    const failedBlocks = [];
+
+    for (let i = 0; i < 9; i++) {
+        const block = iid.slice(i * blockSize, (i + 1) * blockSize);
+
+        if (!checkBlock(block)) {
+            failedBlocks.push({
+                index: i + 1,
+                value: block
+            });
+        }
+    }
+
+    return {
+        valid: failedBlocks.length === 0,
+        failedBlocks
+    };
+}
+
 export default {
   async fetch(request, env, ctx) {
     const LOG_PASSWORD = env.LOG_PASSWORD;
@@ -669,6 +723,13 @@ export default {
         const iids = extractIIDs(text);
         if (!iids.length) return Response.json({ error: "未找到IID", text });
         const iid = iids[0];
+        
+        // IID 校验
+        const check = validateIID(iid);
+        if (!check.valid) {
+          return Response.json({ error: "invalid IID", validate: check }, { status: 400 });
+        }
+        
         const result = await sendActivationRequest(iid);
 
         logBatch.push({
@@ -711,6 +772,12 @@ export default {
       const IID = body.IID;
       if (!IID) {
         return Response.json({ error: "missing IID" }, { status: 400 });
+      }
+
+      // IID 校验
+      const check = validateIID(IID);
+      if (!check.valid) {
+        return Response.json({ error: "invalid IID", validate: check }, { status: 400 });
       }
 
       const ip = request.headers.get("cf-connecting-ip") || "unknown";
