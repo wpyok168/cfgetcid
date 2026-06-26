@@ -1,11 +1,16 @@
 const KV_NAMESPACE = "KV_LOGS";
-const BATCH_SIZE = 20;
-const BATCH_FLUSH_SECONDS = 300;
-const MAX_BATCH_READ = 50;
+const BATCH_SIZE = 200;//200条存1次kv，与BATCH_FLUSH_SECONDS两种条件，哪个先到先执行
+const BATCH_FLUSH_SECONDS = 900;//15分钟存一次KV，与BATCH_SIZE两种条件，哪个先到先执行
+const MAX_BATCH_READ = 100;//一次最多读 100 批日志（够用）
 
 let logBatch = [];
 let lastFlushTime = Date.now();
 let flushing = false;
+
+// ==================== KV 超限自动降级为内存模式 ====================
+let memoryLogs = [];
+let useMemoryOnly = false;
+let memoryBlacklist = [];
 
 function isAuth(request, pwd) {
   const cookie = request.headers.get("cookie") || "";
@@ -134,12 +139,57 @@ function getFormatTime(offset = 8) {
   return tz.toISOString().replace("T", " ").slice(0, 19);
 }
 
+// ==================== 自动降级存储：KV / 内存 ====================
+async function safeKvGet(kv, key) {
+  if (useMemoryOnly) return null;
+  try {
+    return await kv.get(key);
+  } catch (err) {
+    if (err.message?.includes("limit exceeded")) {
+      useMemoryOnly = true;
+    }
+    return null;
+  }
+}
+async function safeKvPut(kv, key, value) {
+  if (useMemoryOnly) return;
+  try {
+    await kv.put(key, value);
+  } catch (err) {
+    if (err.message?.includes("limit exceeded")) {
+      useMemoryOnly = true;
+    }
+  }
+}
+async function safeKvDelete(kv, key) {
+  if (useMemoryOnly) return;
+  try {
+    await kv.delete(key);
+  } catch (err) {}
+}
+async function safeKvList(kv, opts = {}) {
+  if (useMemoryOnly) return { keys: [] };
+  try {
+    return await kv.list(opts);
+  } catch (err) {
+    if (err.message?.includes("limit exceeded")) useMemoryOnly = true;
+    return { keys: [] };
+  }
+}
+
 async function flushBatch(kv) {
   if (flushing || logBatch.length === 0) return;
   flushing = true;
   try {
+    if (useMemoryOnly) {
+      memoryLogs.push(...logBatch);
+      logBatch = [];
+      lastFlushTime = Date.now();
+      return;
+    }
+
     const key = "batch_" + Date.now() + "_" + crypto.randomUUID();
-    await kv.put(key, JSON.stringify(logBatch));
+    await safeKvPut(kv, key, JSON.stringify(logBatch));
     logBatch = [];
     lastFlushTime = Date.now();
   } finally {
@@ -153,32 +203,46 @@ function needFlush() {
 }
 
 async function getAllLogs(kv) {
-  if (!kv) return [];
-  const { keys } = await kv.list({ limit: MAX_BATCH_READ });
-  const all = [];
-  for (const k of keys) {
-    const val = await kv.get(k.name);
-    if (!val) continue;
-    try {
-      const arr = JSON.parse(val);
-      if (Array.isArray(arr)) all.push(...arr);
-    } catch { }
+  if (useMemoryOnly) {
+    return [...memoryLogs].sort((a, b) => (b.time || "").localeCompare(a.time || ""));
   }
-  return all.sort((a, b) => (b.time || "").localeCompare(a.time || ""));
+
+  try {
+    const { keys } = await safeKvList(kv, { limit: MAX_BATCH_READ });
+    const all = [];
+    for (const k of keys) {
+      const val = await safeKvGet(kv, k.name);
+      if (!val) continue;
+      try {
+        const arr = JSON.parse(val);
+        if (Array.isArray(arr)) all.push(...arr);
+      } catch { }
+    }
+    return all.sort((a, b) => (b.time || "").localeCompare(a.time || ""));
+  } catch (err) {
+    return [...memoryLogs].sort((a, b) => (b.time || "").localeCompare(a.time || ""));
+  }
 }
 
 async function deleteLogById(kv, targetId) {
   if (!targetId) return false;
-  const { keys } = await kv.list({ limit: 100 });
+
+  if (useMemoryOnly) {
+    const before = memoryLogs.length;
+    memoryLogs = memoryLogs.filter(item => item.id !== targetId);
+    return memoryLogs.length !== before;
+  }
+
+  const { keys } = await safeKvList(kv, { limit: 100 });
   for (const k of keys) {
-    const val = await kv.get(k.name);
+    const val = await safeKvGet(kv, k.name);
     if (!val) continue;
     try {
       let arr = JSON.parse(val);
       const filtered = arr.filter(item => item.id !== targetId);
       if (filtered.length !== arr.length) {
-        if (filtered.length === 0) await kv.delete(k.name);
-        else await kv.put(k.name, JSON.stringify(filtered));
+        if (filtered.length === 0) await safeKvDelete(kv, k.name);
+        else await safeKvPut(kv, k.name, JSON.stringify(filtered));
         return true;
       }
     } catch { }
@@ -187,11 +251,16 @@ async function deleteLogById(kv, targetId) {
 }
 
 async function clearAllLogs(kv) {
+  if (useMemoryOnly) {
+    memoryLogs = [];
+    return;
+  }
+
   let cursor;
   do {
-    const res = await kv.list({ cursor: cursor });
+    const res = await safeKvList(kv, { cursor: cursor });
     cursor = res.cursor;
-    await Promise.all(res.keys.map(k => kv.delete(k.name)));
+    await Promise.all(res.keys.map(k => safeKvDelete(kv, k.name)));
   } while (cursor);
 }
 
@@ -301,7 +370,7 @@ th,td{padding:10px;border:1px solid #eee}
 </style>
 
 <div class="card">
-  <h3>IID 激活日志</h3>
+  <h3>IID 激活日志 ${useMemoryOnly ? "(⚠️KV超限·内存模式)" : ""}</h3>
   <div class="bar">
     <input id="s" value="${search}" placeholder="搜索 IID">
     <button onclick="location.href='?search='+encodeURIComponent(document.getElementById('s').value)">搜索</button>
@@ -518,9 +587,20 @@ $("#runBtn").onclick = async () => {
   toast("处理完成");
 };
 
-document.addEventListener('paste', e => {
-  const f = e.clipboardData.files[0];
-  if (f) setFile(f);
+document.addEventListener('paste', async e => {
+  // 优先读取剪贴板文件
+  const items = e.clipboardData.items;
+  let pasteFile = null;
+  for (const item of items) {
+    if (item.kind === 'file') {
+      pasteFile = item.getAsFile();
+      break;
+    }
+  }
+  if (pasteFile) {
+    e.preventDefault();
+    setFile(pasteFile);
+  }
 });
 
 ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
@@ -629,16 +709,22 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // 黑名单存储
+    // 黑名单存储（自动降级）
     const BLACKLIST_KEY = "BLACKLIST";
 
     if (path === "/logs/block-ip") {
       if (!isAuth(request, LOG_PASSWORD)) return new Response("403", { status: 403 });
       const ip = await request.text();
-      let list = await kv.get(BLACKLIST_KEY).then(x => x ? JSON.parse(x) : []);
+      
+      if (useMemoryOnly) {
+        if (!memoryBlacklist.includes(ip)) memoryBlacklist.push(ip);
+        return new Response("ok");
+      }
+
+      let list = await safeKvGet(kv, BLACKLIST_KEY).then(x => x ? JSON.parse(x) : []);
       if (!list.includes(ip)) {
         list.push(ip);
-        await kv.put(BLACKLIST_KEY, JSON.stringify(list));
+        await safeKvPut(kv, BLACKLIST_KEY, JSON.stringify(list));
       }
       return new Response("ok");
     }
@@ -646,15 +732,26 @@ export default {
     if (path === "/logs/unblock-ip") {
       if (!isAuth(request, LOG_PASSWORD)) return new Response("403", { status: 403 });
       const ip = await request.text();
-      let list = await kv.get(BLACKLIST_KEY).then(x => x ? JSON.parse(x) : []);
+      
+      if (useMemoryOnly) {
+        memoryBlacklist = memoryBlacklist.filter(i => i !== ip);
+        return new Response("ok");
+      }
+
+      let list = await safeKvGet(kv, BLACKLIST_KEY).then(x => x ? JSON.parse(x) : []);
       list = list.filter(i => i !== ip);
-      await kv.put(BLACKLIST_KEY, JSON.stringify(list));
+      await safeKvPut(kv, BLACKLIST_KEY, JSON.stringify(list));
       return new Response("ok");
     }
 
     // IP 拦截
     const clientIP = request.headers.get("cf-connecting-ip") || "unknown";
-    const blacklist = await kv.get(BLACKLIST_KEY).then(x => x ? JSON.parse(x) : []);
+    let blacklist = [];
+    if (useMemoryOnly) {
+      blacklist = memoryBlacklist;
+    } else {
+      blacklist = await safeKvGet(kv, BLACKLIST_KEY).then(x => x ? JSON.parse(x) : []);
+    }
     if (blacklist.includes(clientIP)) {
       return new Response("Forbidden", { status: 403 });
     }
