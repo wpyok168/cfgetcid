@@ -5,143 +5,24 @@ const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
-const axios = require('axios'); // 替换fetch，消除警告
+
+// 加载环境变量配置（核心：独立配置入口）
+//require('dotenv').config();
+
+// 百度 OCR SDK
+const AipOcrClient = require("baidu-aip-sdk").ocr;
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// ==============================================
-// 【安全防护：全局限流 + IP黑名单 + 后台白名单 + 错误捕获】
-// 不改动任何业务逻辑，纯防护
-// ==============================================
-const rateLimit = require('express-rate-limit');
-
-// 1. 全局限流：1 分钟最多 60 次请求（防CC攻击）
-const globalLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 60,
-  standardHeaders: true,
-  message: { error: '请求过于频繁，请稍后再试' }
-});
-
-// 2. 登录接口限流：5 分钟最多 10 次（防暴力破解）
-const loginLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000,
-  max: 10,
-  message: { error: '登录尝试过多，请5分钟后再试' }
-});
-
-// 应用全局限流
-app.use(globalLimiter);
-
-// 3. IP 黑名单（攻击你的 IP 填这里，一行一个）
-const BLACKLIST_ENABLE = true; //启用黑名单过滤
-const BLACKLIST_AUTO_ENABLE = true; // 自动黑名单 默认关闭false
-const BLACKLIST_AUTO_TIME = 10 * 60 * 1000; // 自动封禁 10分钟
-const IP_RECORD_LIMIT = 80; // 单IP 1分钟内超限则拉黑
-
-// 手动黑名单
-let BLACKLIST = [
-  // 示例：
-  // '1.2.3.4',
-  // '5.6.7.8'
-];
-
-// 自动IP访问记录 + 封禁列表
-const ipVisitMap = new Map();
-const autoBlockMap = new Map();
-const BLACKLIST_FILE = path.join(process.cwd(), 'blacklist.json');
-
-// 加载本地黑名单
-async function loadBlackList() {
-  try {
-    const txt = await fs.readFile(BLACKLIST_FILE, 'utf8');
-    const arr = JSON.parse(txt);
-    if(Array.isArray(arr)) BLACKLIST = arr;
-  } catch {}
-}
-// 保存黑名单
-async function saveBlackList() {
-  await fs.writeFile(BLACKLIST_FILE, JSON.stringify(BLACKLIST,null,2),'utf8');
-}
-loadBlackList();
-
-// 自动计数+自动封禁 定时清理
-setInterval(() => {
-  const now = Date.now();
-  // 清理过期访问计数
-  ipVisitMap.clear();
-  // 解封过期IP
-  for(const [ip, endTime] of autoBlockMap){
-    if(now > endTime) autoBlockMap.delete(ip);
-  }
-}, 60 * 1000);
-
-// IP拦截中间件（手动黑名单 + 自动黑名单）
-app.use(async (req, res, next) => {
-  const ip = getClientIp(req);
-  const now = Date.now();
-  
-  // 实时读取最新黑名单（解封立刻生效）
-  let realBlackList = [...BLACKLIST];
-  try {
-    const txt = await fs.readFile(BLACKLIST_FILE, 'utf8');
-    const arr = JSON.parse(txt);
-    if(Array.isArray(arr)) realBlackList = arr;
-  } catch {}
-
-  // 1. 自动封禁拦截
-  if(BLACKLIST_AUTO_ENABLE && autoBlockMap.has(ip)){
-    return res.status(403).end();
-  }
-
-  // 2. 手动黑名单拦截
-  if(BLACKLIST_ENABLE && BLACKLIST.includes(ip)){
-    return res.status(403).end();
-  }
-
-  // 3. 自动频率统计
-  if(BLACKLIST_AUTO_ENABLE){
-    const count = (ipVisitMap.get(ip) || 0) + 1;
-    ipVisitMap.set(ip, count);
-
-    // 超限自动拉黑
-    if(count >= IP_RECORD_LIMIT){
-      autoBlockMap.set(ip, now + BLACKLIST_AUTO_TIME);
-      return res.status(403).end();
-    }
-  }
-
-  next();
-});
-
-// 4. 日志后台 IP 白名单（只允许你自己访问 /logs，必填自己的公网IP）
-const ADMIN_IP_WHITELIST_ENABLE = false;
-const ADMIN_ALLOW_IPS = [
-  '127.0.0.1',
-  '::1',
-  // 在这里填【你自己的公网IP】，示例：'111.222.333.444'
-];
-app.use('/logs', (req, res, next) => {
-  // 开关关闭 => 直接放行
-  if (!ADMIN_IP_WHITELIST_ENABLE) return next();
-  
-  const ip = getClientIp(req);
-  if (!ADMIN_ALLOW_IPS.includes(ip)) {
-    return res.status(403).send('Forbidden');
-  }
-  next();
-});
-
-// 6. OCR 图片类型校验（只允许图片上传，防恶意文件）
-const ALLOW_MIME = ['image/jpeg', 'image/png', 'image/jpg', 'image/gif'];
-
 // ====================== 配置 ======================
+//const CONFIG_PATH = path.join(__dirname, 'config.json');
 const CONFIG_PATH = path.join(process.cwd(), 'config.json');
 let LOG_PASSWORD = '123456';
 const PORT = process.env.PORT || 9567;
+//const KV_DIR = path.join(__dirname, 'kv_logs');
 const KV_DIR = path.join(process.cwd(), 'kv_logs');
 const BATCH_SIZE = 20;
 const BATCH_FLUSH_SECONDS = 300;
@@ -160,84 +41,26 @@ async function savePassword(newPwd) {
 }
 initConfig();
 
-// ====================== 百度 OCR 配置（无APP ID） ======================
-const BAIDU_API_KEY = "OFClXkRRS9TRRTDvnKMk4TS1";
-const BAIDU_SECRET_KEY = "cyWM6fnvKn5eeLAR6WBGZwYkU2OufuOJ";
-//普通版 general_basic  高精度版accurate_basic
-const ocrUrl = "https://aip.baidubce.com/rest/2.0/ocr/v1/general_basic";
+// ====================== 百度 OCR 配置 ======================
+//const BAIDU_APP_ID = process.env.BAIDU_APP_ID;
+//const BAIDU_API_KEY = process.env.BAIDU_API_KEY;
+//const BAIDU_SECRET_KEY = process.env.BAIDU_SECRET_KEY;
+const BAIDU_APP_ID = "你的_APP_ID";
+const BAIDU_API_KEY = "你的_API_KEY";
+const BAIDU_SECRET_KEY = "你的_SECRET_KEY";
 
-if (!BAIDU_API_KEY || !BAIDU_SECRET_KEY) {
+// 启动校验：OCR配置必须填写
+if (!BAIDU_APP_ID || !BAIDU_API_KEY || !BAIDU_SECRET_KEY) {
   console.error('❌ 错误：百度OCR授权信息未配置！');
+  console.error('✅ 请在项目根目录创建 .env 文件，并填写 BAIDU_APP_ID / BAIDU_API_KEY / BAIDU_SECRET_KEY');
   process.exit(1);
 }
 
-// ====================== 百度OCR HTTP接口（axios版，无警告） ======================
-let baiduAccessToken = null;
-let baiduTokenExpireTime = 0;
+const ocrClient = new AipOcrClient(BAIDU_APP_ID, BAIDU_API_KEY, BAIDU_SECRET_KEY);
+const HttpClient = require('baidu-aip-sdk').HttpClient;
+HttpClient.setRequestOptions({ timeout: 10000 });
 
-async function getBaiduAccessToken() {
-  if (baiduAccessToken && Date.now() < baiduTokenExpireTime) {
-    return baiduAccessToken;
-  }
-
-  try {
-    const res = await axios.post('https://aip.baidubce.com/oauth/2.0/token', null, {
-      params: {
-        grant_type: 'client_credentials',
-        client_id: BAIDU_API_KEY,
-        client_secret: BAIDU_SECRET_KEY
-      },
-      timeout: 10000
-    });
-
-    const data = res.data;
-    if (data.error) throw new Error(`获取Token失败：${data.error_description}`);
-
-    baiduAccessToken = data.access_token;
-    baiduTokenExpireTime = Date.now() + (data.expires_in - 60) * 1000;
-    return baiduAccessToken;
-  } catch (e) {
-    throw new Error('Token请求失败');
-  }
-}
-
-async function baiduAccurateBasicOcr(base64Image) {
-  const pureBase64 = base64Image.replace(/^data:image\/\w+;base64,/, '');
-  const token = await getBaiduAccessToken();
-
-  try {
-    // 构建表单数据（百度OCR官方要求格式，解决413错误）
-    const params = new URLSearchParams();
-    params.append('image', pureBase64);
-    params.append('language_type', 'CHN_ENG');
-
-    const res = await axios.post(`${ocrUrl}?access_token=${token}`, params, {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      timeout: 10000
-    });
-
-    const result = res.data;
-    if (result.error_code) {
-      throw new Error(`OCR失败[${result.error_code}]：${result.error_msg}`);
-    }
-    return result;
-  } catch (e) {
-    throw new Error(e.message || 'OCR请求失败');
-  }
-}
-
-// 上传配置
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const allow = ['image/jpeg', 'image/png', 'image/jpg', 'image/gif'];
-    if (allow.includes(file.mimetype)) cb(null, true);
-    else cb(new Error('不支持的文件类型'), false);
-  }
-});
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 // ====================== 日志批处理 ======================
 let logBatch = [];
@@ -286,23 +109,25 @@ async function c1(t, e) {
 }
 
 function GenerateSessionId() {
+  //return 'app_' + Math.random().toString(36).slice(2, 15);
   const t = Date.now().toString(36);
   const e = Math.random().toString(36).substr(2, 9);
   return `app_${t}_${e}`;
 }
 
 async function safeParse(resp) {
-  try {
-    return resp.data;
-  } catch {
-    return { raw: resp };
-  }
+  const text = await resp.text();
+  try { return JSON.parse(text); } catch { return { raw: text }; }
 }
 
+// ✅ 修复：保留时区偏移，正确计算东八区时间，日期+时间完全准确
 function getFormatTime(offset = TIMEZONE) {
   const now = new Date();
+  // 计算UTC时间戳
   const utcTimestamp = now.getTime() + now.getTimezoneOffset() * 60000;
+  // 应用时区偏移
   const targetTime = new Date(utcTimestamp + 3600000 * offset);
+  // 格式化年月日时分秒
   const year = targetTime.getFullYear();
   const month = String(targetTime.getMonth() + 1).padStart(2, '0');
   const day = String(targetTime.getDate()).padStart(2, '0');
@@ -312,41 +137,62 @@ function getFormatTime(offset = TIMEZONE) {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
+// ✅ 新增：获取真实客户端IP（修复OCR日志IP错误）
 function getClientIp(req) {
-  const forwarded = (req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  if (forwarded && forwarded !== 'unknown') return forwarded;
+  // 优先获取代理传递的真实IP
+  const forwardedIp = req.headers['x-forwarded-for'];
+  if (forwardedIp) {
+    return forwardedIp.split(',')[0].trim();
+  }
+  // 兜底原生请求IP
   return req.ip || 'unknown';
 }
 
-// ====================== IID 提取规则 ======================
+// ====================== IID 提取规则（修正：过滤无关数字，优先7位组→6位组） ======================
 function extractIIDs(text) {
   const results = [];
+
+  // 新增：过滤无关数字（解决800/400电话号码、短数字误识别问题）
+  // 1. 过滤800/400开头的10位电话号码（如8008203800、4008203800）
   let filteredText = text.replace(/\b(800|400)\d{1,7}\b/g, '');
+  // 2. 过滤非6位、非7位的短数字（如12345678，避免干扰IID提取）
   filteredText = filteredText.replace(/\b\d{1,5}\b|\b\d{8,9}\b/g, '');
 
+  // 原有格式匹配（保留，基于过滤后文本匹配）
   const pattern54 = /\b(?:\d{6}\s+){8}\d{6}\b/g;
   const pattern63 = /\b(?:\d{7}\s+){8}\d{7}\b/g;
 
   const m54 = filteredText.match(pattern54) || [];
   const m63 = filteredText.match(pattern63) || [];
 
+  // 优先级1：先处理 63位（7位一组）IID
   for (const s of m63) {
     const c = s.replace(/\s+/g, '');
     if (c.length === 63) results.push(c);
   }
+
+  // 优先级2：再处理 54位（6位一组）IID
   for (const s of m54) {
     const c = s.replace(/\s+/g, '');
     if (c.length === 54) results.push(c);
   }
 
+  // 优先级3：纯数字长串（优先63位，再54位，基于过滤后文本）
   const nums = filteredText.match(/\d{54,63}/g) || [];
+  // 先取63位
   for (const n of nums) {
-    if (n.length === 63) results.push(n);
+    if (n.length === 63) {
+      results.push(n);
+    }
   }
+  // 再取54位
   for (const n of nums) {
-    if (n.length === 54) results.push(n);
+    if (n.length === 54) {
+      results.push(n);
+    }
   }
 
+  // 优先级4：兜底（过滤后所有数字拼接，优先63位，再54位）
   const allDigits = filteredText.replace(/\D/g, '');
   if (allDigits.length >= 63) {
     results.push(allDigits.slice(0, 63));
@@ -354,6 +200,7 @@ function extractIIDs(text) {
     results.push(allDigits.slice(0, 54));
   }
 
+  // 去重，避免重复提取
   return [...new Set(results)];
 }
 
@@ -428,6 +275,7 @@ function loginPage(msg = '') {
   return `<!DOCTYPE html><meta charset="utf-8"><title>登录</title><style>body{display:grid;place-items:center;height:100vh;margin:0}.box{padding:24px;background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,0.1);width:320px}input,button{width:100%;padding:10px;margin:8px 0;border-radius:6px;border:1px solid #ddd}button{background:#0066cc;color:white;border:none;cursor:pointer}.msg{color:green;text-align:center;margin:8px 0}.err{color:red}</style><div class="box"><h3>日志后台登录</h3>${msg ? `<div class="${msg.includes('成功') ? 'msg' : 'err'}">${msg}</div>` : ''}<form method="post"><input type="password" name="pwd" required placeholder="密码"><button>登录</button></form></div>`;
 }
 
+// 新增：修改密码页面
 function changePasswordPage(msg = '') {
   return `<!DOCTYPE html><meta charset="utf-8"><title>修改登录密码</title>
 <style>
@@ -465,8 +313,6 @@ function logPage(logs, page, totalPages, search) {
       <button onclick="del('${item.id}')" style="background:red;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer">删除</button>
       <button onclick="searchIID('${encodeURIComponent(item.IID || '')}')" style="background:#6c757d;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;margin:0 2px">同IID</button>
       <button onclick="showDetail('${encodeURIComponent(JSON.stringify(item.result))}')" style="background:#0066cc;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;margin:0 2px">详情</button>
-      <button onclick="blockIp('${item.ip}')" style="background:#d32f2f;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;margin:0 2px">拉黑IP</button>
-      <button onclick="unblockIp('${item.ip}')" style="background:#388e3c;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;margin:0 2px">解封IP</button>
     </td>
   </tr>`).join('');
 
@@ -520,20 +366,6 @@ function showDetail(s){ try{const r=JSON.parse(decodeURIComponent(s));$('#detail
 function closeDetailModal(){ $('#detailModal').style.display='none'; }
 async function copyDetailJson(){ const txt=$('#detailContent').textContent; if(!txt){toast('暂无内容');return;} try{await navigator.clipboard.writeText(txt);toast('已复制');}catch{toast('复制失败');} }
 async function del(id){ if(!confirm('确认删除？'))return; await fetch('/logs/delete',{method:'POST',body:id}); location.reload(); }
-
-// 拉黑IP
-async function blockIp(ip){
-  if(!confirm('确认拉黑该IP：'+ip+'？')) return;
-  await fetch('/logs/block-ip', {method:'POST', body:ip});
-  toast('已拉黑');
-}
-
-// 解封IP
-async function unblockIp(ip){
-  if(!confirm('确认解封该IP：'+ip+'？')) return;
-  await fetch('/logs/unblock-ip', {method:'POST', body:ip});
-  toast('已解封');
-}
 </script>`;
 }
 
@@ -579,11 +411,15 @@ button{padding:12px 16px;border-radius:10px;border:none;background:#0078d4;color
     <button id="clearAllBtn" class="btn-red">清空</button>
   </div>
 
-  <label style="margin-top:20px">📷 图片 OCR 识别（粘贴/拖拽/选择）</label>
+  <label style="margin-top:20px">📷 图片 OCR 识别（粘贴/拖拽/相册/手机拍照）</label>
   <div class="ocr-box" id="ocrBox">
-    点击选择 / 拖拽图片 / Ctrl+V 粘贴截图
+    点击选择相册 / 拖拽图片 / Ctrl+V 粘贴截图 / 手机直接拍照
     <input type="file" id="imgFile" accept="image/*" hidden>
-    <button onclick="document.getElementById('imgFile').click()" style="margin-top:10px">选择图片</button>
+    <input type="file" id="cameraFile" accept="image/*" capture="environment" hidden>
+    <div class="btn-group" style="justify-content:center;margin-top:12px">
+      <button onclick="document.getElementById('imgFile').click()">从相册选择图片</button>
+      <button onclick="document.getElementById('cameraFile').click()" class="btn-gray">📸 手机直接拍照</button>
+    </div>
     <img id="preview" class="preview">
   </div>
   <div class="btn-group">
@@ -675,17 +511,56 @@ $('#ocrBox').addEventListener('drop', e => setFile(e.dataTransfer.files[0]));
 
 // 选择图片
 $('#imgFile').onchange = e => setFile(e.target.files[0]);
+$('#cameraFile').onchange = e => setFile(e.target.files[0]);
 
+// 无压缩、无旋转、无对比度处理，原图直接上传，解决识别空白
+// 升级版 setFile 函数：支持自动修正手机拍照旋转 + 压缩
 function setFile(f) {
   currentFile = f;
-  preview.src = URL.createObjectURL(f);
-  preview.style.display = 'block';
-  toast('图片已加载');
+  
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const img = new Image();
+    img.onload = function() {
+      // 创建 Canvas 进行图像预处理（尺寸缩放与角度矫正）
+      const canvas = document.createElement('canvas');
+      let ctx = canvas.getContext('2d');
+      
+      const MAX_WIDTH = 1280; // 限制最大宽度，提高 OCR 识别率，节省流量
+      let width = img.width;
+      let height = img.height;
+      
+      if (width > MAX_WIDTH) {
+        height = Math.round((height * MAX_WIDTH) / width);
+        width = MAX_WIDTH;
+      }
+      
+      canvas.width = width;
+      canvas.height = height;
+      
+      // 核心：直接将图片绘制进 Canvas，现代浏览器在 Canvas 绘制 Image 时
+      // 已经默认会自动依据 Exif 标志修正旋转（image-orientation: from-image）
+      ctx.drawImage(img, 0, 0, width, height);
+      
+      // 转回 Blob 并更新 currentFile
+      canvas.toBlob(function(blob) {
+        // 创建一个新的 File 对象替代原文件上传
+        currentFile = new File([blob], f.name || "capture.jpg", { type: "image/jpeg" });
+        
+        // 更新预览图
+        preview.src = URL.createObjectURL(currentFile);
+        preview.style.display = 'block';
+        toast('图片已处理（已优化分辨率与旋转）');
+      }, 'image/jpeg', 0.85); // 0.85 压缩率
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(f);
 }
 
 // OCR + IID + CID
 $('#btnOcrIid').onclick = async () => {
-  if (!currentFile) { toast('请选择图片'); return; }
+  if (!currentFile) { toast('请选择图片或拍照'); return; }
   const fd = new FormData();
   fd.append('image', currentFile);
   $('#status').textContent = 'OCR识别中...';
@@ -712,44 +587,105 @@ $('#btnOcrOnly').onclick = async () => {
 </body></html>`;
 }
 
-// ====================== 激活接口（axios版，无警告） ======================
+/**
+ * ✅ 获取 Token JSON 数据（供全局使用）
+ * @returns {Promise<Object>}
+ */
+async function getTokenData() {
+  try {
+    // 10 秒超时控制器
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch('https://cidtoken.x2ray.cfd', {
+      method: 'GET',
+      signal: controller.signal, // 绑定超时信号
+    });
+
+    // 清除定时器
+    clearTimeout(timeoutId);
+
+    // 处理 HTTP 错误状态码（非 2xx）
+    if (!response.ok) {
+      throw new Error(`HTTP 错误: ${response.status}`);
+    }
+
+    let data;
+    try {
+      // 解析 JSON
+      data = await response.json();
+    } catch (jsonErr) {
+      throw new Error('解析 JSON 失败：' + jsonErr.message);
+    }
+
+    // 校验返回数据是否有效
+    if (!data || !data.access_token) {
+      throw new Error('无效的 Token 数据');
+    }
+
+    return data;
+  } catch (err) {
+    let msg = '请求失败';
+
+    // 统一错误处理（和原逻辑完全一致）
+    if (err.name === 'AbortError') {
+      msg = '请求超时';
+    } else if (err.message.includes('HTTP 错误')) {
+      msg = `网络请求失败：${err.message}`;
+    } else if (err.message.includes('解析 JSON 失败')) {
+      msg = err.message;
+    } else if (err.message === '无效的 Token 数据') {
+      msg = err.message;
+    } else {
+      msg = err.message;
+    }
+
+    throw new Error(msg);
+  }
+}
+
+// ====================== 激活接口 ======================
 async function sendActivationRequest(IID) {
   if (!IID) throw new Error('missing IID');
   const dpop = await c1('/api/productActivation/validateIID', 'POST');
   const sid = GenerateSessionId();
-
-  try {
-    const res = await axios.post('https://visualsupport.microsoft.com/api/productActivation/validateIID', {
-      IID, ProductType: 'windows', productGroup: 'Windows', productName: 'Windows 11',
-      numberOfDigits: Math.floor(IID.length / 9), Country: 'CHN', Region: 'APAC', InstalledDevices: 1,
-      OverrideStatusCode: 'MUL', InitialReasonCode: '45164'
-    }, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer govUrlID',
-        'DPoP': dpop,
-        'x-session-id': sid
-      },
-      timeout: 10000
-    });
-
-    return { status: res.status, success: true, data: res.data };
-  } catch (e) {
-    return { status: e.response?.status || 500, success: false, data: e.message };
+  const tokenJson = await getTokenData();
+  if (!tokenJson || !tokenJson.access_token) {
+    throw new Error("获取 AccessToken 失败，请检查网络或接口");
   }
+  //console.log(IID)
+  
+  const digits = Math.floor(IID.length / 9);
+  const res = await fetch('https://visualsupport.microsoft.com/api/productActivation/validateIID', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      //'Authorization': 'Bearer govUrlID',
+      'Authorization': `Bearer ${tokenJson.access_token}`,
+      
+      'DPoP': dpop,
+      'x-session-id': sid
+    },
+    body: JSON.stringify({
+      IID, ProductType: 'windows', productGroup: 'Windows', productName: 'Windows 11',
+      numberOfDigits: digits, Country: 'CHN', Region: 'APAC', InstalledDevices: 1,
+      OverrideStatusCode: 'MUL', InitialReasonCode: '45164'
+    })
+  });
+  return { status: res.status, success: res.ok, data: await safeParse(res) };
 }
 
 // ====================== OCR 接口 ======================
 app.post('/api/ocr-iid', upload.single('image'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: '请上传图片' });
     const base64 = req.file.buffer.toString('base64');
-    const ocr = await baiduAccurateBasicOcr(base64);
+    const ocr = await ocrClient.accurateBasic(base64);
     const text = ocr.words_result?.map(p => p.words).join('\n') || '';
     const iids = extractIIDs(text);
     if (iids.length === 0) return res.json({ error: "未识别到IID", ocrText: text });
     const first = iids[0];
     const result = await sendActivationRequest(first);
+    // ✅ 修复：记录真实客户端IP
     logBatch.push({ id: crypto.randomUUID(), time: getFormatTime(), IID: first, ip: getClientIp(req), result });
     if (needFlush()) flushBatch();
     return res.json(result);
@@ -761,7 +697,7 @@ app.post('/api/ocr-iid', upload.single('image'), async (req, res) => {
 app.post('/api/ocr-only', upload.single('image'), async (req, res) => {
   try {
     const base64 = req.file.buffer.toString('base64');
-    const ocr = await baiduAccurateBasicOcr(base64);
+    const ocr = await ocrClient.accurateBasic(base64);
     const text = ocr.words_result?.map(p => p.words).join('\n') || '';
     res.json({ ocrText: text });
   } catch (e) {
@@ -770,37 +706,7 @@ app.post('/api/ocr-only', upload.single('image'), async (req, res) => {
 });
 
 // ====================== 路由 ======================
-// 手动添加IP到黑名单（后台鉴权）
-app.post('/logs/block-ip', async (req,res)=>{
-  if(!isAuth(req)) return res.sendStatus(403);
-  let ip = '';
-  try{
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    ip = Buffer.concat(chunks).toString('utf8').trim();
-  }catch{}
-  if(!ip) return res.send('empty');
-  if(!BLACKLIST.includes(ip)){
-    BLACKLIST.push(ip);
-    await saveBlackList();
-  }
-  res.send('ok');
-});
-
-// 移除黑名单IP
-app.post('/logs/unblock-ip', async (req,res)=>{
-  if(!isAuth(req)) return res.sendStatus(403);
-  let ip = '';
-  try{
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    ip = Buffer.concat(chunks).toString('utf8').trim();
-  }catch{}
-  BLACKLIST = BLACKLIST.filter(item=>item!==ip);
-  await saveBlackList();
-  res.send('ok');
-});
-
+// 新增：修改密码路由（修改后强制退出重新登录）
 app.all('/logs/change-password', async (req, res) => {
   if (!isAuth(req)) return res.send(loginPage());
   if (req.method === 'POST') {
@@ -810,7 +716,9 @@ app.all('/logs/change-password', async (req, res) => {
     if (!newPwd.trim()) return res.send(changePasswordPage('❌ 新密码不能为空'));
     await savePassword(newPwd.trim());
     
+    // 清除登录Cookie，强制重新登录
     res.clearCookie('log_token', { path: '/logs' });
+    // 跳转到登录页，提示修改成功
     return res.redirect('/logs?msg=密码修改成功，请使用新密码登录');
   }
   res.send(changePasswordPage());
@@ -838,7 +746,6 @@ app.post('/logs/delete', async (req, res) => {
   res.send('ok');
 });
 
-app.use('/logs', loginLimiter);
 app.all('/logs', async (req, res) => {
   const msg = req.query.msg || '';
   if (req.method === 'POST') {
@@ -867,7 +774,11 @@ app.all('/', async (req, res) => {
     if (!IID) return res.status(400).json({ error: 'missing IID' });
     const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
     const result = await sendActivationRequest(IID);
-    logBatch.push({ id: crypto.randomUUID(), time: getFormatTime(), IID, ip, result });
+    logBatch.push({
+      id: crypto.randomUUID(),
+      time: getFormatTime(),
+      IID, ip, result
+    });
     if (needFlush()) flushBatch();
     res.json(result);
   } catch (err) {
@@ -875,20 +786,12 @@ app.all('/', async (req, res) => {
   }
 });
 
-// ==============================================
-// ✅ 全局错误捕获（必须放在所有路由最后！）
-// ==============================================
-app.use((err, req, res, next) => {
-  console.error('服务器异常：', err);
-  res.status(500).json({ error: 'server error' });
-});
-
 // ====================== 启动 ======================
+// 监听 0.0.0.0 允许所有IP访问（局域网/公网/服务器IP）
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ 服务已启动：http://127.0.0.1:${PORT}`);
   console.log(`🌐 公网/IP访问：http://【你的服务器IP】:${PORT}`);
   console.log(`🔑 日志后台密码：${LOG_PASSWORD}`);
   console.log(`📷 新增：图片OCR识别 → 自动获取CID`);
   console.log(`🔐 新增：修改密码后强制重新登录`);
-  console.log(`🔐 新增：限流+图片上传类型限定+访问ip黑名单+日志白名单`);
 });
