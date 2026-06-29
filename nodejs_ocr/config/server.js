@@ -553,6 +553,7 @@ async function unblockIp(ip){
 </script>`;
 }
 
+
 function toolPage() {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -583,8 +584,10 @@ button{padding:12px 16px;border-radius:10px;border:none;background:#0078d4;color
 </style>
 </head>
 <body>
+
 <div class="card">
   <h1><img src="https://icons.duckduckgo.com/ip3/microsoft.com.ico"> IID 确认 ID 批量工具</h1>
+  
   <label>IID 列表（一行一个）</label>
   <textarea id="iids" placeholder="一行一个 IID，支持批量粘贴"></textarea>
   <div class="btn-group">
@@ -592,97 +595,48 @@ button{padding:12px 16px;border-radius:10px;border:none;background:#0078d4;color
     <button id="copyBtn" class="btn-gray">复制结果</button>
     <button id="clearAllBtn" class="btn-red">清空</button>
   </div>
-  <label style="margin-top:20px">📷 图片 OCR 识别（粘贴/拖拽/选择）</label>
+
+  <label style="margin-top:20px">📷 图片 OCR 识别（粘贴/拖拽/相册/手机拍照）</label>
   <div class="ocr-box" id="ocrBox">
-    点击选择 / 拖拽图片 / Ctrl+V 粘贴截图
+    点击选择相册 / 拖拽图片 / Ctrl+V 粘贴截图 / 手机直接拍照
     <input type="file" id="imgFile" accept="image/*" hidden>
-    <button onclick="document.getElementById('imgFile').click()" style="margin-top:10px">选择图片</button>
+    <input type="file" id="cameraFile" accept="image/*" capture="environment" hidden>
+    <div class="btn-group" style="justify-content:center;margin-top:12px">
+      <button onclick="document.getElementById('imgFile').click()">从相册选择图片</button>
+      <button onclick="document.getElementById('cameraFile').click()" class="btn-gray">📸 手机直接拍照</button>
+    </div>
     <img id="preview" class="preview">
   </div>
   <div class="btn-group">
     <button id="btnOcrIid">OCR识别并获取CID</button>
     <button id="btnOcrOnly" class="btn-gray">仅OCR识别文字</button>
   </div>
+
   <div class="status" id="status"></div>
   <label>运行结果</label>
   <div class="result" id="resultBox"></div>
 </div>
-<div class="footer">本工具后端服务器通过官方接口获取确认ID<br>仅用于合法授权设备激活<br><br><a href="/logs">日志后台管理</a><br><br>本页面使用<a href="https://github.com/wpyok168/cfgetcid" target="_blank">Github</a>开源项目进行部署，如果需要可以自行部署</div>
+
+<div class="footer">
+  本工具后端服务器通过官方接口 visualsupport.microsoft.com 获取确认 ID<br>
+  数据安全返回并展示于前端页面，仅用于合法授权设备激活<br><br>
+  <a href="/logs">日志后台管理</a>
+  <br><br>本页面使用<a href="https://github.com/wpyok168/cfgetcid" target="_blank">Github</a>开源项目进行部署，如果需要可以自行部署
+</div>
+
 <div class="toast" id="toast"></div>
+
 <script>
 const $ = s => document.querySelector(s);
-const toast = msg => { const t=$('#toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000); };
+const toast = msg => {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2000);
+};
+
 let currentFile = null;
-const preview = $('#preview');
-
-// 清空所有（含图片）
-$('#clearAllBtn').onclick = () => {
-  $('#iids').value = '';
-  $('#resultBox').textContent = '';
-  $('#status').textContent = '';
-  
-  // 清空图片
-  currentFile = null;
-  preview.src = '';
-  preview.style.display = 'none';
-  
-  toast('已清空全部内容');
-};
-
-// 复制结果
-$('#copyBtn').onclick = async () => {
-  const txt = $('#resultBox').textContent;
-  if (!txt) { toast('无内容可复制'); return; }
-  await navigator.clipboard.writeText(txt);
-  toast('已复制');
-};
-
-// 批量获取CID
-$('#runBtn').onclick = async () => {
-  const text = $('#iids').value;
-  const lines = text.split('\\n').map(i => i.trim().replace(/\\D/g, '')).filter(Boolean);
-  if (!lines.length) { toast('请输入 IID'); return; }
-  
-  const btn = $('#runBtn');
-  btn.disabled = true;
-  btn.textContent = '处理中...';
-  
-  const out = [];
-  for (const iid of lines) {
-    $('#status').textContent = '处理：' + iid;
-    try {
-      const r = await fetch('/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ IID: iid })
-      });
-      const j = await r.json();
-      out.push(JSON.stringify(j, null, 2) + '\\n------------------------------------\\n');
-    } catch (e) {
-      out.push('请求失败\\n------------------------------------\\n');
-    }
-  }
-  $('#resultBox').textContent = out.join('');
-  $('#status').textContent = '完成：' + lines.length + ' 条';
-  btn.disabled = false;
-  btn.textContent = '批量获取';
-  toast('完成');
-};
-
-// 粘贴图片
-document.addEventListener('paste', e => {
-  const f = e.clipboardData.files[0];
-  if (f) setFile(f);
-});
-
-// 拖拽
-['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
-  $('#ocrBox').addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); });
-});
-$('#ocrBox').addEventListener('drop', e => setFile(e.dataTransfer.files[0]));
-
-// 选择图片
-$('#imgFile').onchange = e => setFile(e.target.files[0]);
+const preview = $("#preview");
 
 // 无压缩、无旋转、无对比度处理，原图直接上传，解决识别空白
 // 升级版 setFile 函数：支持自动修正手机拍照旋转 + 压缩
@@ -729,9 +683,79 @@ function setFile(f) {
   reader.readAsDataURL(f);
 }
 
-// OCR + IID + CID
+$("#clearAllBtn").onclick = () => {
+  $("#iids").value = "";
+  $("#resultBox").textContent = "";
+  $("#status").textContent = "";
+  currentFile = null;
+  preview.src = "";
+  preview.style.display = "none";
+  toast("已清空全部");
+};
+
+$("#copyBtn").onclick = async () => {
+  const txt = $("#resultBox").textContent;
+  if (!txt) { toast("暂无内容"); return; }
+  await navigator.clipboard.writeText(txt);
+  toast("已复制结果");
+};
+
+$("#runBtn").onclick = async () => {
+  const text = $("#iids").value;
+  const lines = text.split("\\n").map(i => i.trim().replace(/\\D/g,"")).filter(Boolean);
+  if (lines.length === 0) { toast("请输入 IID"); return; }
+
+  const btn = $("#runBtn");
+  btn.disabled = true;
+  btn.textContent = "处理中...";
+
+  const output = [];
+  for (const iid of lines) {
+    $("#status").textContent = "处理：" + iid;
+    try {
+      const resp = await fetch("/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ IID: iid })
+      });
+      const json = await resp.json();
+      output.push(JSON.stringify(json, null, 2) + "\\n------------------------------------\\n");
+    } catch(e) {
+      output.push("请求失败\\n------------------------------------\\n");
+    }
+  }
+
+  $("#resultBox").textContent = output.join("");
+  $("#status").textContent = "完成：" + lines.length + " 条";
+  btn.disabled = false;
+  btn.textContent = "批量获取";
+  toast("处理完成");
+};
+
+document.addEventListener('paste', async e => {
+  const items = e.clipboardData.items;
+  let pasteFile = null;
+  for (const item of items) {
+    if (item.kind === 'file') {
+      pasteFile = item.getAsFile();
+      break;
+    }
+  }
+  if (pasteFile) {
+    e.preventDefault();
+    setFile(pasteFile);
+  }
+});
+
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
+  $('#ocrBox').addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); });
+});
+$('#ocrBox').addEventListener('drop', e => setFile(e.dataTransfer.files[0]));
+$('#imgFile').onchange = e => setFile(e.target.files[0]);
+$('#cameraFile').onchange = e => setFile(e.target.files[0]);
+
 $('#btnOcrIid').onclick = async () => {
-  if (!currentFile) { toast('请选择图片'); return; }
+  if (!currentFile) { toast('请选择图片或拍照'); return; }
   const fd = new FormData();
   fd.append('image', currentFile);
   $('#status').textContent = 'OCR识别中...';
@@ -742,7 +766,6 @@ $('#btnOcrIid').onclick = async () => {
   toast('完成');
 };
 
-// 仅OCR
 $('#btnOcrOnly').onclick = async () => {
   if (!currentFile) { toast('请选择图片'); return; }
   const fd = new FormData();
@@ -755,7 +778,8 @@ $('#btnOcrOnly').onclick = async () => {
   toast('完成');
 };
 </script>
-</body></html>`;
+</body>
+</html>`;
 }
 
 // ====================== 激活接口（axios版，无警告） ======================
