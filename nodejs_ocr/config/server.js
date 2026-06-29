@@ -272,40 +272,69 @@ function getClientIp(req) {
   return req.ip || 'unknown';
 }
 
+// ==================== OCR 工具函数 ====================
+// 清洗OCR脏文本：去掉字母、汉字、符号、多余空格换行、客服电话
+function cleanOcrText(rawText) {
+  let txt = rawText
+    // 1. 删除图片文件名相关字符 test、jpg、png、jpeg
+    .replace(/test|jpg|png|jpeg/g, "")
+    // 2. 删除全部字母、中文汉字
+    .replace(/[a-zA-Z\u4e00-\u9fa5]/g, "")
+    // 3. 删除除数字、空格以外所有符号
+    .replace(/[^\d\s]/g, " ")
+    // 4. 多空格/换行统一为单个空格
+    .replace(/\s+/g, " ")
+    // 5. 移除800/400客服电话整串
+    .replace(/\b(800|400)\d+\b/g, " ")
+    // 6. 关键：过滤1-6位孤立短数字碎片（界面零散数字、日期碎片）
+    .replace(/\b\d{1,6}\b/g, " ")
+    .trim();
+  return txt;
+}
+
 function extractIIDs(text) {
   const results = [];
-  let filteredText = text.replace(/\b(800|400)\d{1,7}\b/g, '');
-  filteredText = filteredText.replace(/\b\d{1,5}\b|\b\d{8,9}\b/g, '');
+  const filteredText = cleanOcrText(text);
 
-  const pattern54 = /\b(?:\d{6}\s+){8}\d{6}\b/g;
-  const pattern63 = /\b(?:\d{7}\s+){8}\d{7}\b/g;
+  // 标准分段IID：7位9段 / 6位9段
+  const pattern63 = /(?:\d{7}\s){8}\d{7}/g;
+  const pattern54 = /(?:\d{6}\s){8}\d{6}/g;
 
-  const m54 = filteredText.match(pattern54) || [];
   const m63 = filteredText.match(pattern63) || [];
+  const m54 = filteredText.match(pattern54) || [];
 
   for (const s of m63) {
-    const c = s.replace(/\s+/g, '');
+    const c = s.replace(/\s/g, "");
     if (c.length === 63) results.push(c);
   }
   for (const s of m54) {
-    const c = s.replace(/\s+/g, '');
+    const c = s.replace(/\s/g, "");
     if (c.length === 54) results.push(c);
   }
 
-  const nums = filteredText.match(/\d{54,63}/g) || [];
-  for (const n of nums) {
-    if (n.length === 63 || n.length === 54) results.push(n);
+  // 直接匹配连续长数字串
+  const longDigits = filteredText.match(/\d{54,63}/g) || [];
+  longDigits.forEach(d => {
+    if ([54, 63].includes(d.length)) results.push(d);
+  });
+
+  // 全文纯数字滑动截取，不再只截取开头
+  const pureAll = filteredText.replace(/\D/g, "");
+  // 优先遍历所有63位窗口
+  for (let i = 0; i <= pureAll.length - 63; i++) {
+    const seg = pureAll.slice(i, i + 63);
+    results.push(seg);
+  }
+  // 再遍历所有54位窗口
+  for (let i = 0; i <= pureAll.length - 54; i++) {
+    const seg = pureAll.slice(i, i + 54);
+    results.push(seg);
   }
 
-  const allDigits = filteredText.replace(/\D/g, '');
-  if (allDigits.length >= 63) {
-    results.push(allDigits.slice(0, 63));
-  } else if (allDigits.length >= 54) {
-    results.push(allDigits.slice(0, 54));
-  }
-
-  return [...new Set(results)];
+  // 去重 + 严格长度过滤
+  return [...new Set(results)].filter(x => [54, 63].includes(x.length));
 }
+
 
 /**
  * ✅ 获取 Token JSON 数据（供全局使用）
@@ -655,11 +684,49 @@ $('#ocrBox').addEventListener('drop', e => setFile(e.dataTransfer.files[0]));
 // 选择图片
 $('#imgFile').onchange = e => setFile(e.target.files[0]);
 
+// 无压缩、无旋转、无对比度处理，原图直接上传，解决识别空白
+// 升级版 setFile 函数：支持自动修正手机拍照旋转 + 压缩
 function setFile(f) {
   currentFile = f;
-  preview.src = URL.createObjectURL(f);
-  preview.style.display = 'block';
-  toast('图片已加载');
+  
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const img = new Image();
+    img.onload = function() {
+      // 创建 Canvas 进行图像预处理（尺寸缩放与角度矫正）
+      const canvas = document.createElement('canvas');
+      let ctx = canvas.getContext('2d');
+      
+      const MAX_WIDTH = 1280; // 限制最大宽度，提高 OCR 识别率，节省流量
+      let width = img.width;
+      let height = img.height;
+      
+      if (width > MAX_WIDTH) {
+        height = Math.round((height * MAX_WIDTH) / width);
+        width = MAX_WIDTH;
+      }
+      
+      canvas.width = width;
+      canvas.height = height;
+      
+      // 核心：直接将图片绘制进 Canvas，现代浏览器在 Canvas 绘制 Image 时
+      // 已经默认会自动依据 Exif 标志修正旋转（image-orientation: from-image）
+      ctx.drawImage(img, 0, 0, width, height);
+      
+      // 转回 Blob 并更新 currentFile
+      canvas.toBlob(function(blob) {
+        // 创建一个新的 File 对象替代原文件上传
+        currentFile = new File([blob], f.name || "capture.jpg", { type: "image/jpeg" });
+        
+        // 更新预览图
+        preview.src = URL.createObjectURL(currentFile);
+        preview.style.display = 'block';
+        toast('图片已处理（已优化分辨率与旋转）');
+      }, 'image/jpeg', 0.85); // 0.85 压缩率
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(f);
 }
 
 // OCR + IID + CID
