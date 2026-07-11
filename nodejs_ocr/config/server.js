@@ -801,7 +801,7 @@ async function sendActivationRequest(IID) {
       headers: {
         'Content-Type': 'application/json',
         //'Authorization': 'Bearer govUrlID',
-        'Authorization': `Bearer ${tokenJson.access_token}`,
+        'Authorization': `Bearer ${tokenJson.id_token}`,
         'DPoP': dpop,
         'x-session-id': sid
       },
