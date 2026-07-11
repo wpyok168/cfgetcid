@@ -107,7 +107,7 @@ async function sendActivationRequest(IID) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${tokenJson.access_token}`,
+      "Authorization": `Bearer ${tokenJson.id_token}`,
       "DPoP": dpop,
       "x-session-id": sid
     },
