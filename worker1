@@ -942,6 +942,48 @@ export default {
       }
     }
 
+    // ========== 新增 /api/getcid 接口，原有代码全部保留 ==========
+if (path === "/api/getcid" && request.method === "GET") {
+  try {
+    const API_TOKEN = env.API_TOKEN || "";
+    const urlParams = new URLSearchParams(url.search);
+    const token = urlParams.get("token");
+    const iid = urlParams.get("iid");
+
+    if (!token || token !== API_TOKEN) {
+      return Response.json({ error: "token校验失败" }, { status: 403 });
+    }
+    if (!iid) {
+      return Response.json({ error: "iid参数不能为空" }, { status: 400 });
+    }
+
+    // IID合法性校验（复用已有函数）
+    const check = validateIID(iid);
+    if (!check.valid) {
+      return Response.json({ error: "invalid IID", validate: check }, { status: 400 });
+    }
+
+    const ip = request.headers.get("cf-connecting-ip") || "unknown";
+    const result = await sendActivationRequest(iid);
+
+    // 写入日志，和主接口保持一致
+    logBatch.push({
+      id: crypto.randomUUID(),
+      time: getFormatTime(TIMEZONE),
+      IID: iid,
+      ip: ip,
+      result: result
+    });
+    if (needFlush()) ctx.waitUntil(flushBatch(kv));
+
+    return Response.json(result.data);
+  } catch (err) {
+    return Response.json({ error: "error", detail: err + "" }, { status: 500 });
+  }
+}
+// ============================================================
+
+
     if (request.method === "GET") {
       return new Response(toolPage(), {
         headers: { "Content-Type": "text/html; charset=utf-8" }
