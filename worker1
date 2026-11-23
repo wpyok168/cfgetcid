@@ -942,7 +942,7 @@ export default {
       }
     }
 
-    // ========== 新增 /api/getcid 接口，原有代码全部保留 ==========
+    // ========== 新增 /api/getcid 接口，原有代码全部保留   /api/getcid?token= &iid=  ==========
 if (path === "/api/getcid" && request.method === "GET") {
   try {
     const API_TOKEN = env.API_TOKEN || "";
